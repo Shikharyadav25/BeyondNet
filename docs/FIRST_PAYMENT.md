@@ -4,7 +4,7 @@ Use the 1.1.1 APK (or 1.1.0 on Android 12+) with the existing 1.1.0 bank. This p
 
 ## 1. Laptop
 
-Start `Start-Bank.command` (macOS), `start-bank.sh` (Linux) or `start-bank.ps1` (Windows). Open `http://localhost:8080`; unlock with `data/admin-token.txt`. Expose port 8080 through a trusted HTTPS tunnel that supports WebSockets, for example `cloudflared tunnel --url http://localhost:8080` after installing cloudflared. Keep both processes and the laptop awake.
+Start `Start-Bank.command` (macOS), `start-bank.sh` (Linux) or `start-bank.ps1` (Windows). Open `http://localhost:8080`; unlock with `data/admin-token.txt`. Start `Start-Ngrok.command` on macOS or run `ngrok http http://127.0.0.1:8080 --inspect=false` after configuring ngrok's free account. See [Ngrok setup](NGROK.md) for the fixed address and existing-phone update steps. Keep both processes and the laptop awake and online.
 
 Copy the HTTPS URL and the full bank fingerprint from **Device setup**. The operator key is only for the console; never enter it as a phone password. The laptop needs internet, not Bluetooth.
 
