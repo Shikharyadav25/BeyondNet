@@ -1,0 +1,55 @@
+{
+  "sign_seed": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+  "box_seed": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=",
+  "sign_public": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+  "box_public": "NYBy1jZYgNGu6jKa35EhODhR7SGijjt16WXQ0s0WYlQ=",
+  "body": {
+    "v": 1,
+    "amount": 12500,
+    "currency": "INR",
+    "note": "Chai café ₹ ☕",
+    "nested": {
+      "z": [
+        1,
+        2
+      ],
+      "a": true
+    }
+  },
+  "signed": {
+    "body": {
+      "v": 1,
+      "amount": 12500,
+      "currency": "INR",
+      "note": "Chai café ₹ ☕",
+      "nested": {
+        "z": [
+          1,
+          2
+        ],
+        "a": true
+      }
+    },
+    "signature": "tohf1ld380fGpC8vpIUme+qp4MK9IwA/RK30UulNv9nfA9dL2QYNYa7xfjr5+LNeLF3DTi4ZnHW1z4htInfVBA=="
+  },
+  "box": {
+    "ephemeral": "ToFjXkaMrKnhJF8MG2WOt+r2tzZPiRy4+nETbRtYN1Y=",
+    "nonce": "FTBBw6HH/ddabneA",
+    "ciphertext": "zDIScYXPj494eycHtwpmd45JcnFsFv3YiKyngvqWqyMc1JNQeYZbnLFCjtVugx4VYSwVdJN/J2cYgdXI/LkVyKrWASOxR3CTkQ2BlSW7j/FjX0/Bxa0CCVKYv/pEDabM0YwCaE3jmuBnRSnj7giMXqwSrBvaDKSJ8PlN3tSg3/Iu4mwXusu8zDbkbHpRbEzAYIVZ4ydsEqAA2xLalobn0xywYMV2k70dnDbD1TkhxFUYE+vnMK7gQlZk8+PLdRTgnfexidTrk5BCFhAcBT1dv9OJDO/mGl5/I6jJm8+fZGgK"
+  },
+  "packet": {
+    "v": 1,
+    "kind": "payment",
+    "mailbox": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "box": {
+      "ephemeral": "ToFjXkaMrKnhJF8MG2WOt+r2tzZPiRy4+nETbRtYN1Y=",
+      "nonce": "FTBBw6HH/ddabneA",
+      "ciphertext": "zDIScYXPj494eycHtwpmd45JcnFsFv3YiKyngvqWqyMc1JNQeYZbnLFCjtVugx4VYSwVdJN/J2cYgdXI/LkVyKrWASOxR3CTkQ2BlSW7j/FjX0/Bxa0CCVKYv/pEDabM0YwCaE3jmuBnRSnj7giMXqwSrBvaDKSJ8PlN3tSg3/Iu4mwXusu8zDbkbHpRbEzAYIVZ4ydsEqAA2xLalobn0xywYMV2k70dnDbD1TkhxFUYE+vnMK7gQlZk8+PLdRTgnfexidTrk5BCFhAcBT1dv9OJDO/mGl5/I6jJm8+fZGgK"
+    },
+    "expires_at": 2000000000,
+    "id": "4a02ea83905a3710bcf1bd72a5ab219f2447064cd67fc8d030b0d1810bacb199",
+    "hops": 0,
+    "path": []
+  },
+  "canonical": "{\"amount\":12500,\"currency\":\"INR\",\"nested\":{\"a\":true,\"z\":[1,2]},\"note\":\"Chai café ₹ ☕\",\"v\":1}"
+}

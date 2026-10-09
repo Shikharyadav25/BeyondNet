@@ -1,0 +1,28 @@
+name: beyondnet
+description: Encrypted nearby payment demo for iOS and Android.
+publish_to: none
+version: 1.1.1+4
+environment:
+  sdk: ^3.12.0
+  flutter: ">=3.44.0"
+dependencies:
+  flutter:
+    sdk: flutter
+  bluetooth_low_energy: 6.2.1
+  cryptography: 2.9.0
+  flutter_secure_storage: 11.2.0
+  permission_handler: 13.0.2
+  mobile_scanner: 7.4.2
+  local_auth: 3.0.2
+  path_provider: 2.1.6
+  sqflite: 2.4.4
+  uuid: ^4.5.3
+  qr_flutter: ^4.1.0
+  http: ^1.6.0
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  sqflite_common_ffi: ^2.4.3
+flutter:
+  uses-material-design: true
