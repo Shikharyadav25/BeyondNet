@@ -1,0 +1,27 @@
+CREATE TABLE IF NOT EXISTS accounts (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, role TEXT NOT NULL,
+    balance BIGINT NOT NULL CHECK(balance >= 0), salt BYTEA NOT NULL, password TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, account TEXT NOT NULL, expiry BIGINT NOT NULL);
+CREATE TABLE IF NOT EXISTS devices (
+    id TEXT PRIMARY KEY, account TEXT NOT NULL REFERENCES accounts(id),
+    sign_key TEXT NOT NULL UNIQUE, box_key TEXT NOT NULL, certificate TEXT NOT NULL, revoked BIGINT NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS payments (
+    sender TEXT NOT NULL, id TEXT NOT NULL, hash TEXT NOT NULL, recipient TEXT NOT NULL,
+    amount BIGINT NOT NULL, status TEXT NOT NULL, reason TEXT NOT NULL, bank_ref TEXT NOT NULL,
+    committed BIGINT NOT NULL, receipts TEXT NOT NULL, PRIMARY KEY(sender,id));
+CREATE TABLE IF NOT EXISTS ledger (
+    id BIGSERIAL PRIMARY KEY, payment TEXT NOT NULL, account TEXT NOT NULL,
+    delta BIGINT NOT NULL, balance_after BIGINT NOT NULL, committed BIGINT NOT NULL);
+CREATE TABLE IF NOT EXISTS mailboxes (capability TEXT PRIMARY KEY, receipts TEXT NOT NULL, expiry BIGINT NOT NULL);
+CREATE TABLE IF NOT EXISTS topups (
+    account TEXT NOT NULL, request_id TEXT NOT NULL, amount BIGINT NOT NULL,
+    reference TEXT NOT NULL, PRIMARY KEY(account,request_id));
+CREATE TABLE IF NOT EXISTS device_receipts (
+    seq BIGSERIAL PRIMARY KEY, device TEXT NOT NULL,
+    packet_id TEXT NOT NULL UNIQUE, packet TEXT NOT NULL, expiry BIGINT NOT NULL);
+CREATE INDEX IF NOT EXISTS receipt_device ON device_receipts(device,seq);
+CREATE TABLE IF NOT EXISTS events (id BIGSERIAL PRIMARY KEY, at BIGINT NOT NULL, kind TEXT NOT NULL, detail TEXT NOT NULL);
+
+CREATE TABLE IF NOT EXISTS payment_pins(account TEXT PRIMARY KEY REFERENCES accounts(id),salt BYTEA NOT NULL,hash TEXT NOT NULL,failed BIGINT NOT NULL DEFAULT 0,locked_until BIGINT NOT NULL DEFAULT 0);
+
+CREATE TABLE IF NOT EXISTS migration_meta(id TEXT PRIMARY KEY, imported_at BIGINT NOT NULL, summary TEXT NOT NULL);

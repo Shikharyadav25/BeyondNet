@@ -1,0 +1,5 @@
+# Copy to data/postgres.properties; chmod 600. Never commit real credentials.
+url=jdbc:postgresql://127.0.0.1:5433/beyondnet
+user=beyondnet
+password=REPLACE_WITH_DATABASE_PASSWORD
+schema=public

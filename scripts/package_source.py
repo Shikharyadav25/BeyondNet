@@ -2,8 +2,9 @@
 from pathlib import Path
 import zipfile
 ROOT=Path(__file__).resolve().parents[1]
-OUTPUT=ROOT/'BeyondNet-source.zip'
-EXCLUDED={'.git','.kotlin','.venv','data','build','.dart_tool','.gradle','.cxx','.pytest_cache','__pycache__','Pods','.symlinks','ephemeral','xcuserdata','.idea','installers'}
+OUTPUT=ROOT/'dist'/'BeyondNet-source.zip'
+OUTPUT.parent.mkdir(exist_ok=True)
+EXCLUDED={'dist','target','.git','.kotlin','.venv','data','build','.dart_tool','.gradle','.cxx','.pytest_cache','__pycache__','Pods','.symlinks','ephemeral','xcuserdata','.idea','installers'}
 SKIP_FILES={'local.properties','Generated.xcconfig','flutter_export_environment.sh','.flutter-plugins-dependencies','GeneratedPluginRegistrant.java','GeneratedPluginRegistrant.h','GeneratedPluginRegistrant.m'}
 with zipfile.ZipFile(OUTPUT,'w',zipfile.ZIP_DEFLATED) as z:
     for p in sorted(ROOT.rglob('*')):

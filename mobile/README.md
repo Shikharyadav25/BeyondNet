@@ -1,14 +1,14 @@
-# BeyondNet mobile
+# BeyondNet Android app
 
-See [the project README](../README.md) and [first-payment guide](../docs/FIRST_PAYMENT.md).
-
-Build with Flutter 3.44+ stable and Dart 3.12+. The project includes native Android and iOS runners. Android requires API 31+; iOS requires 15+. Use physical phones for Bluetooth. Keep the app in the foreground. For iPhone field tests use a signed release build so it can launch without an attached debugger.
+Flutter 3.44+ / Dart 3.12+, Android 10+ (API 29), compile SDK 37, target SDK 36. Native runners currently include Android only. Use physical phones for Bluetooth; keep participating apps visible.
 
 ```sh
 flutter pub get
 flutter analyze
 flutter test
-flutter run --release -d <device-id>
+flutter build apk --release
 ```
 
-Do not uninstall while payments are unresolved: uninstalling can remove the local queue and device keys. The app intentionally has no destructive reset button.
+The APK is created at `build/app/outputs/flutter-apk/app-release.apk`. Install over an existing BeyondNet installation with the same application ID and signing certificate to retain device keys and history. Do not uninstall while a payment outcome is unresolved.
+
+See the [developer build flow](../docs/BUILD_FLOW.md), [installation guide](../docs/PHONE_INSTALLATION.md), and [first payment](../docs/FIRST_PAYMENT.md).

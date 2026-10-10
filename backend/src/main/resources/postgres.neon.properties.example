@@ -1,0 +1,6 @@
+# Private deployment configuration: copy to data/postgres.properties and chmod 600.
+# Obtain a direct Neon host and existing role password from your own project's Connect dialog.
+# Never commit credentials; use an empty target for a verified migration.
+url=jdbc:postgresql://YOUR_DIRECT_NEON_HOST/neondb?sslmode=verify-full&sslfactory=org.postgresql.ssl.DefaultJavaSSLFactory&connectTimeout=15
+user=YOUR_NEON_ROLE
+password=REPLACE_WITH_DATABASE_PASSWORD

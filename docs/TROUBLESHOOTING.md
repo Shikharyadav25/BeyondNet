@@ -8,7 +8,7 @@
 | No recipients | Ask the recipient to sign up/enroll, then find their payment ID online or scan their QR. Offline ID lookup needs a cached certificate or a connected relay that can resolve it. |
 | Nearby relay will not start | Enable Bluetooth and grant Nearby devices/Bluetooth permissions. Open app settings after a permanent denial. Android must support BLE peripheral advertising. |
 | No verified peers | All phones must be enrolled in the same bank, have Nearby relay on, remain in the foreground, and be within actual BLE range. Confirm allowlists in both directions and reasonably synchronized clocks. |
-| Bluetooth radio on but no peers | Having Bluetooth on alone does not make another phone an BeyondNet relay. The app must be installed, enrolled, open, and opted in. The simulator cannot test this. |
+| Bluetooth radio on but no peers | Having Bluetooth on alone does not make another phone a BeyondNet relay. The app must be installed, enrolled, open, and opted in. The simulator cannot test this. |
 | Direct path bypasses middle phone | Use the documented allowlists. With an unrestricted mesh, a direct path is valid behavior. |
 | Bank connection says unavailable | Confirm mobile data/Wi-Fi internet, correct bank origin, laptop/tunnel running, and bank not paused. Retries back off to 60 seconds; the refresh action checks again. |
 | Gateway says renew login | Go online and renew the account session in Device settings. Preserve the existing device keys and queue. |
@@ -19,8 +19,6 @@
 | Device authentication fails | Set a secure passcode/PIN or biometric on the phone. On Android, use the supplied FragmentActivity/AppCompat configuration. |
 | Receipt balance looks old | It is explicitly a snapshot. Refresh online or wait for the newer signed ledger revision. Pending requests are not locally settled balances. |
 | QR scanning is unavailable | Grant camera access. You can still select a cached recipient without camera permission. |
-| iPhone app stops after locking | Keep the app visible for this demo. Background transport and restoration have not been implemented. |
-| iPhone cannot launch after unplugging | Install a signed release build and check development provisioning; a debug build can depend on the debugger. |
 | Android build fails on Java version | Use a JDK supported by the generated Gradle/Android plugin, and confirm `flutter doctor -v`. Do not change payment code to work around build-tool setup. |
 | Bank rejects a packet without a signed decision | Malformed, unauthorized, or conflicting instructions do not create a success. The phone retains an unknown financial outcome; inspect the operator ledger by payment ID. |
 
@@ -42,8 +40,6 @@ Restarting the bank does not reset balances or decisions. A duplicate original p
 
 ## Build components on the development Mac
 
-The iOS build attempt reported: **iOS 26.5 is not installed**. In **Xcode → Settings → Components**, install the iOS platform component corresponding to the selected Xcode, then rerun the build. The presence of an older iOS simulator runtime alone does not resolve a missing current platform component.
-
 The Android configuration requires **NDK 28.2.13676358**. Install it in **Android Studio → SDK Manager → SDK Tools → NDK (Side by side) → Show Package Details**, or use:
 
 ```sh
@@ -54,7 +50,7 @@ Then rerun `flutter build apk --release`. Build success must be confirmed before
 
 ## New signup and live updates
 
-Use the updated 1.1.0 bank with the new APK. A 404 on signup/top-up usually means an older bank process is running. IDs must use `3-to-32-characters@beyondnet`; existing IDs sign in as before. A duplicate signup after an interrupted enrollment can be completed through Sign in. New accounts need Add demo money before spending.
+Use the current Java bank with APK 1.2.1. A 404 on signup/top-up usually means an older bank process is running. IDs must use `3-to-32-characters@beyondnet`; existing IDs sign in as before. A duplicate signup after an interrupted enrollment can be completed through Sign in. New accounts need Add demo money before spending.
 
 If WSS is blocked by a proxy, HTTPS recovery still works; allow WebSocket upgrades for live status. Internet is off means Android reports no validated internet route. Cannot reach the bank can instead mean a stopped bank, paused service, expired login, stale tunnel URL or trust mismatch. Offline payments still need a verified nearby peer; they cannot settle until a gateway reaches the bank.
 

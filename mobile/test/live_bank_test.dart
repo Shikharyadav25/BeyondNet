@@ -34,15 +34,18 @@ void main() {
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
   test(
-    'Real Dart signup, top-up, live payment and merchant receipt against Python bank',
+    'Real Dart signup, top-up, live payment and merchant receipt against Spring Boot bank',
     () async {
       final python =
           Platform.environment['BEYONDNET_TEST_PYTHON'] ??
           '../.venv/bin/python';
       final process = await Process.start(python, [
-        '../scripts/test_live_bank.py',
+        '../scripts/test_java_bank.py',
       ]);
-      process.stderr.drain<void>();
+      final startupErrors = StringBuffer();
+      final errors = process.stderr
+          .transform(utf8.decoder)
+          .listen(startupErrors.write);
       final lines = StreamIterator(
         process.stdout.transform(utf8.decoder).transform(const LineSplitter()),
       );
@@ -50,8 +53,9 @@ void main() {
       final dir = await Directory.systemTemp.createTemp('beyondnet-live-');
       try {
         expect(
-          await lines.moveNext().timeout(const Duration(seconds: 15)),
+          await lines.moveNext().timeout(const Duration(seconds: 45)),
           isTrue,
+          reason: startupErrors.toString(),
         );
         final setup = jsonDecode(lines.current);
         final port = setup['port'] as int;
@@ -96,6 +100,7 @@ void main() {
         final merchant = await create('shop', 'merchant');
         final sender = await create('customer', 'customer');
         expect(sender.account!['balance'], 0);
+        await sender.setPaymentPin('test-password', '123456');
         await sender.addDemoMoney(100000);
         expect(sender.account!['balance'], 100000);
         final cert = await sender.findRecipient('shop@beyondnet');
@@ -103,7 +108,7 @@ void main() {
           sender.relay,
           isFalse,
         ); // Online payments need no Bluetooth or relay toggle.
-        final id = await sender.pay(cert, 12345);
+        final id = await sender.pay(cert, 12345, pin: '123456');
         await eventually(
           () => sender.payments.any(
             (p) => p['payment_id'] == id && p['state'] == 'paid',
@@ -120,7 +125,7 @@ void main() {
         );
         // Lost live connection recovers via HTTPS, with the same signed request.
         sender.closeLive();
-        final second = await sender.pay(cert, 100);
+        final second = await sender.pay(cert, 100, pin: '123456');
         await sender.retryNow();
         await eventually(
           () => sender.payments.any(
@@ -132,7 +137,7 @@ void main() {
         for (final e in nodes) {
           e.timer?.cancel();
           e.connectionTimer?.cancel();
-          final until = DateTime.now().add(const Duration(seconds: 15));
+          final until = DateTime.now().add(const Duration(seconds: 45));
           while ((e.working || e.checkingConnection) &&
               DateTime.now().isBefore(until)) {
             await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -144,8 +149,10 @@ void main() {
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
             .setMockMethodCallHandler(BeyondNetEngine.platform, null);
         process.kill(ProcessSignal.sigterm);
-        await process.exitCode.timeout(const Duration(seconds: 5));
+        // Helper may spend 10s stopping Java, then remove its PostgreSQL schema.
+        await process.exitCode.timeout(const Duration(seconds: 20));
         await lines.cancel();
+        await errors.cancel();
         await dir.delete(recursive: true);
       }
     },

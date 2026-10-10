@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>BeyondNet · Bank Console</title>
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body>
+    <aside>
+      <a class="brand" href="/">
+        ◈ <span>Beyond<span class="accent">Net</span><small>BANK CONSOLE</small></span>
+      </a>
+      <p class="nav-label">WORKSPACE</p>
+      <nav>
+        <button class="active" data-view="overview">▦ &nbsp; Overview</button>
+        <button data-view="payments">↗ &nbsp; Payments</button>
+        <button data-view="ledger">≡ &nbsp; Account ledger</button>
+        <button data-view="setup">◉ &nbsp; Device setup</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <span class="dot"></span> Internet endpoint only
+        <p>The bank never joins the Bluetooth mesh.</p>
+        <small>SIMULATED INR · DEMO ENVIRONMENT</small>
+      </div>
+    </aside>
+
+    <main>
+      <header>
+        <div>
+          <div class="eyebrow">OFFLINE PAYMENTS / DEMO BANK</div>
+          <h1 id="heading">Bank overview</h1>
+        </div>
+        <div class="status">
+          <span id="connection-dot" class="dot"></span>
+          <span id="connection-text">Connecting</span>
+          <button id="lock">Lock console</button>
+        </div>
+      </header>
+
+      <div id="error" role="alert" hidden></div>
+
+      <section id="overview" class="view">
+        <div class="hero">
+          <div>
+            <div class="eyebrow">NEARBY PHONES. ONE CONNECTED GATEWAY.</div>
+            <h2>Offline at the phone.<br>Confirmed at the bank.</h2>
+            <p>Encrypted requests travel between participating phones.<br>Only a connected gateway submits them for settlement.</p>
+            <button id="rehearse" class="primary">▶ Run software rehearsal</button>
+            <span class="hint">Uses simulated phones, not Bluetooth hardware.</span>
+          </div>
+          <div class="route-art">
+            <div class="node">
+              <span>◎</span>
+              <b>Sender</b>
+              <small>No internet</small>
+            </div>
+            <i>·····</i>
+            <div class="node">
+              <span>⇄</span>
+              <b>Relay</b>
+              <small>Bluetooth LE</small>
+            </div>
+            <i>·····</i>
+            <div class="node gateway">
+              <span>↗</span>
+              <b>Gateway</b>
+              <small>Internet on</small>
+            </div>
+            <div class="bank-node">
+              ↓ HTTPS ↓
+              <b>▥ &nbsp; Demo bank</b>
+            </div>
+          </div>
+        </div>
+
+        <div class="metrics">
+          <article>
+            <label>Confirmed payments</label>
+            <strong id="paid-count">—</strong>
+            <small>Verified bank decisions</small>
+          </article>
+          <article>
+            <label>Total settled</label>
+            <strong id="volume">—</strong>
+            <small>Demo rupees only</small>
+          </article>
+          <article>
+            <label>Registered devices</label>
+            <strong id="devices-count">—</strong>
+            <small>Enrolled in this bank</small>
+          </article>
+          <article>
+            <label>Bank connection</label>
+            <strong id="connection-state">—</strong>
+            <button id="toggle-bank">Pause submissions</button>
+          </article>
+        </div>
+
+        <div class="columns">
+          <section class="panel">
+            <div class="panel-title">
+              <h3>Demo accounts</h3>
+              <span class="badge">Persistent balances</span>
+            </div>
+            <div id="accounts"></div>
+          </section>
+          <section class="panel">
+            <div class="panel-title">
+              <h3>Latest activity</h3>
+              <span class="badge">Actual bank events</span>
+            </div>
+            <div id="events" class="events"></div>
+          </section>
+        </div>
+
+        <section class="panel" id="rehearsal-panel" hidden>
+          <div class="panel-title">
+            <h3>Software rehearsal evidence</h3>
+            <span class="badge teal">Real encryption + bank ledger</span>
+          </div>
+          <p class="muted">The hops below are a software simulation. Physical Bluetooth transfer is verified separately on your phones.</p>
+          <div id="rehearsal"></div>
+        </section>
+      </section>
+
+      <section id="payments" class="view" hidden>
+        <div class="panel">
+          <h3>Bank decisions</h3>
+          <p class="muted">A queued request is not a payment. Every result here is committed to the bank database.</p>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Payment</th>
+                  <th>From → To</th>
+                  <th>Amount</th>
+                  <th>Decision</th>
+                  <th>Reference</th>
+                </tr>
+              </thead>
+              <tbody id="payment-rows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="ledger" class="view" hidden>
+        <div class="panel">
+          <h3>Double-entry payment ledger</h3>
+          <p class="muted">Each successful payment creates one debit and one credit in the same database transaction.</p>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Bank reference</th>
+                  <th>Account</th>
+                  <th>Change</th>
+                  <th>Balance after</th>
+                  <th>Committed</th>
+                </tr>
+              </thead>
+              <tbody id="ledger-rows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="setup" class="view" hidden>
+        <div class="panel">
+          <h3>Your first BeyondNet payment</h3>
+          <ol class="steps">
+            <li>
+              <b>Start and expose this bank over HTTPS.</b>
+              <p>Use a WebSocket-capable HTTPS tunnel to localhost:8080. The laptop never joins Bluetooth.</p>
+            </li>
+            <li>
+              <b>Create accounts while online.</b>
+              <p>On each phone choose Personal or Merchant, enter a name, a unique ID ending in @beyondnet and a password. Use the same bank URL and fingerprint below. Existing users can sign in.</p>
+            </li>
+            <li>
+              <b>Add demo money on the sender.</b>
+              <p>Set a six-digit demo payment PIN while connected, then tap Add demo money. New accounts start at zero. No real payment details are needed.</p>
+            </li>
+            <li>
+              <b>Try an online payment first.</b>
+              <p>The merchant shows their QR. The personal user scans it or enters the merchant ID, then authorizes. Live bank receipts appear on both phones automatically.</p>
+            </li>
+            <li>
+              <b>Try offline payment with two phones.</b>
+              <p>Enable Nearby relay on both phones, grant Nearby devices permission and keep Bluetooth and the apps on. Leave the merchant online; turn sender internet off. On the sender scan for nearby phones, tap Connect, then pay. Either account type can relay; no gateway account or switch is needed.</p>
+            </li>
+            <li>
+              <b>Check the bank receipt.</b>
+              <p>Match its reference with Payments and the debit/credit ledger. Add an optional third relay phone to test extra hops. A relay acknowledgment alone is not settlement.</p>
+            </li>
+          </ol>
+
+          <h4>Bank setup QR</h4>
+          <p>On the phone choose <b>Scan bank QR</b> or <b>Choose QR image</b> during signup or sign-in. This QR contains both the bank HTTPS URL and its fingerprint. No passwords or operator keys are included.</p>
+          <label for="setup-bank-url">Public bank HTTPS URL</label>
+          <input id="setup-bank-url" type="url" placeholder="https://your-bank.example" autocomplete="off">
+          <button id="generate-bank-qr" class="primary">Generate setup QR</button>
+          <p id="setup-qr-error" role="alert"></p>
+          <div id="setup-qr-result" hidden>
+            <img id="setup-bank-qr" width="300" height="300" alt="Bank setup QR containing the HTTPS URL and bank trust fingerprint">
+            <p id="setup-qr-origin"></p>
+            <a id="download-bank-qr" download="BeyondNet-bank-setup.png">Download QR image</a>
+            <p>Scan this dashboard or save the image to your phone. Signup still needs internet and checks the bank fingerprint before sending credentials.</p>
+          </div>
+
+          <h4>Bank trust fingerprint</h4>
+          <code id="fingerprint"></code>
+
+          <h4>Registered devices</h4>
+          <div id="device-list"></div>
+        </div>
+      </section>
+
+      <footer>BeyondNet · Encrypted transport / atomic demo settlement / signed receipts · No real UPI or real money</footer>
+    </main>
+
+    <dialog id="login">
+      <form id="login-form">
+        <div class="brand">◈ Beyond<span class="accent">Net</span></div>
+        <h2>Open your bank console</h2>
+        <p>Enter the operator key saved in <code>data/admin-token.txt</code> on this laptop.</p>
+        <label for="admin-key">Bank operator key</label>
+        <input id="admin-key" type="password" autocomplete="off" required>
+        <button class="primary">Open console →</button>
+        <p id="login-error" role="alert"></p>
+        <small>The phone apps use separate demo account credentials.</small>
+      </form>
+    </dialog>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

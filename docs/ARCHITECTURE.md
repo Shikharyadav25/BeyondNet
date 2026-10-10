@@ -9,7 +9,7 @@ flowchart LR
     A[Offline sender / Android] <-->|BLE GATT| B[Offline relay / Android]
     B <-->|BLE GATT| C[Connected phone / gateway]
     C <-->|WSS / HTTPS| K[Laptop demo bank]
-    K --- DB[(SQLite ledger and receipts)]
+    K --- DB[(PostgreSQL ledger and receipts)]
     K --- UI[Operator browser console]
 ```
 
@@ -19,22 +19,22 @@ The physical topology is discovered, not hardcoded. A four-hop budget bounds eac
 
 | Layer | Implementation | Reason |
 |---|---|---|
-| Native mobile UI | Flutter / Dart, Material 3 | One coherent UI and protocol implementation across iPhone and Android |
-| Nearby transport | `bluetooth_low_energy` 6.2.1, native Core Bluetooth and Android BLE | Central and peripheral APIs on both platforms; no internet dependency |
+| Native mobile UI | Flutter / Dart, Material 3 | Android UI and protocol implementation |
+| Nearby transport | `bluetooth_low_energy` 6.2.1, Android BLE | Central and peripheral APIs on Android; no internet dependency |
 | Phone persistence | SQLite through `sqflite` | Durable packets, intents, receipts, config, and redacted events |
 | Phone secret storage | `flutter_secure_storage` | OS-protected storage for device seeds and session data |
 | Authorization | `local_auth` | Native biometrics/device credential confirmation |
 | Recipient exchange | `mobile_scanner`, `qr_flutter` | Bank-signed identity QR; works after enrollment without internet |
-| Cryptography | Dart `cryptography`, Python `cryptography` | Cross-language Ed25519 and X25519/HKDF/AES-GCM interoperability |
-| Bank | Python FastAPI | Small, inspectable HTTP service with generated API documentation |
-| Bank persistence | SQLite WAL, explicit immediate transaction | Simple laptop setup and serialized atomic balance changes |
+| Cryptography | Dart `cryptography`, Java JCA and Bouncy Castle | Cross-language Ed25519 and X25519/HKDF/AES-GCM interoperability |
+| Bank | Java Spring Boot | HTTP and WebSocket service with explicit authorization boundaries |
+| Bank persistence | PostgreSQL JDBC, transaction-scoped advisory locks | Atomic ledger/receipt decisions and safe concurrent idempotent retries |
 | Laptop console | Local HTML/CSS/JavaScript, authenticated polling | No separate frontend build process; shows committed bank data |
 
-The supplied architecture was Android-only with Spring Boot/PostgreSQL. The requested iPhone test changes the mobile requirement. This implementation uses a shared native Flutter app and an explicit cross-platform BLE protocol. SQLite is suitable for a single-process demonstration; a scaled bank would use a different operational design. No real bank/UPI adapter is included.
+The phone is a native Flutter app using an authenticated BLE GATT protocol. The bank is Java Spring Boot with PostgreSQL; phone SQLite remains local offline storage. iPhone and Wi-Fi mesh are not released. No real bank/UPI adapter is included.
 
 ## Account types, funding and connectivity
 
-Version 1.1.1 has customer/personal and merchant accounts. Relay is an opt-in capability on either, with automatic gateway operation whenever internet and the bank are reachable. Signup creates a zero-balance account. Funding uses a persistent `(account, request_id)` key, an atomic account credit and offsetting `demo-funding` ledger entry. The phone saves an unresolved top-up ID before sending it.
+Version 1.2.1 has customer/personal and merchant accounts. Relay is an opt-in capability on either, with automatic gateway operation whenever internet and the bank are reachable. Signup creates a zero-balance account. Funding uses a persistent `(account, request_id)` key, an atomic account credit and offsetting `demo-funding` ledger entry. The phone saves an unresolved top-up ID before sending it.
 
 Android reports validated internet connectivity through a native method channel. The app separately verifies bank reachability/trust on launch, resume and every five seconds. A bank outage is not reported as internet being off. Online own payments submit without enabling Bluetooth. Offline new payments require a recently verified, explicitly selected nearby peer. Existing saved packets keep retrying even after a route disappears.
 
@@ -60,7 +60,7 @@ sequenceDiagram
     participant R as Relay
     participant G as Gateway
     participant B as Bank
-    S->>S: Confirm amount, device authentication
+    S->>S: Confirm amount, demo PIN + device authentication
     S->>S: Sign, encrypt, atomically save intent + packet
     S->>R: Authenticated BLE transfer
     R->>R: Validate packet hash, persist
@@ -92,7 +92,7 @@ The displayed balance is a labeled bank snapshot. Signed receipts carry a ledger
 
 ## Bank transaction
 
-SQLite `BEGIN IMMEDIATE` serializes writers before checking balances. The bank verifies the registered sender’s signature and compares the full canonical request hash for `(sender, payment_id)`.
+A PostgreSQL transaction-scoped per-bank advisory lock serializes writers before checking balances, including separate Java instances. The bank verifies the registered sender’s signature and compares the full canonical request hash for `(sender, payment_id)`.
 
 For a new valid instruction it checks the authorization window, parties, and funds. Success updates both balances and creates matching debit/credit rows. Rejection records the decision without ledger entries. In the same transaction, the bank signs and encrypts receipts and saves recovery mailboxes and an event. Any exception rolls everything back.
 
@@ -100,9 +100,9 @@ Signing inside the small demo transaction removes the need for a separate outbox
 
 ## Persistence and restart
 
-Bank keys and database live under `data/` (or `KARO_DATA_DIR`). Phone intents and ciphertext queues live in application SQLite; key seeds and the login session use secure storage. Restarting the app reconstructs receipt delivery from retained ciphertext, then the user explicitly starts Nearby relay again. Relay does not silently restart in the background. Online connectivity monitoring and direct own-payment recovery restart automatically while the app is open.
+Bank identity lives under `data/` (or `KARO_DATA_DIR`); this deployment stores its PostgreSQL ledger on Neon. The retired local cluster has been removed. Phone intents and ciphertext queues live in application SQLite; key seeds and the login session use secure storage. Restarting the app reconstructs receipt delivery from retained ciphertext, then the user explicitly starts Nearby relay again. Relay does not silently restart in the background. Online connectivity monitoring and direct own-payment recovery restart automatically while the app is open.
 
-Receipts live for seven days; requests are authorized for 15 minutes. Expired payment packets remain cached for seven more days to support mailbox recovery, but are no longer submitted as new authorizations or forwarded. Permanent own payment history is preserved. There is no automatic cancellation or refund feature.
+Receipts live for seven days; new requests are authorized for 10 minutes. Expired payment packets remain cached for seven more days to support mailbox recovery, but are no longer submitted as new authorizations or forwarded. Permanent own payment history is preserved. There is no automatic cancellation or refund feature.
 
 ## Observability
 
@@ -110,6 +110,8 @@ The laptop console displays actual committed bank events, balances, decisions, a
 
 ## Platform references
 
-- [Apple Core Bluetooth background behavior](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html): background scanning/advertising and suspension have important restrictions. The demo therefore keeps apps visible.
 - [Android Bluetooth permissions](https://developer.android.com/develop/connectivity/bluetooth/bt-permissions): Android 12+ requires scan/connect/advertise runtime grants.
 - [BLE plugin documentation](https://pub.dev/documentation/bluetooth_low_energy/latest/index.html): supported native central/peripheral APIs. The dependency is pinned in the project.
+
+
+See [Java setup and class map](SPRING_BOOT_SETUP.md) for PIN storage, verified legacy migration, backup, and current startup commands. The hybrid envelope remains X25519/HKDF/AES-GCM with Ed25519 signatures; the encrypted payment body is v2. Expiry never reverses a committed payment.

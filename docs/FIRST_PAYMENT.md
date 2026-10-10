@@ -1,12 +1,12 @@
 # Your first BeyondNet payment (Android)
 
-Use the 1.1.1 APK (or 1.1.0 on Android 12+) with the existing 1.1.0 bank. This phone compatibility update does not require a bank restart. Keep the bank’s existing `data/` directory so its fingerprint and balances stay intact.
+Use the **1.2.1 APK** with the Java/PostgreSQL bank. Keep the existing bank identity and import its ledger using [current setup](SPRING_BOOT_SETUP.md). Install over the existing app so local keys/history are retained.
 
 ## 1. Laptop
 
 Start `Start-Bank.command` (macOS), `start-bank.sh` (Linux) or `start-bank.ps1` (Windows). Open `http://localhost:8080`; unlock with `data/admin-token.txt`. Start `Start-Ngrok.command` on macOS or run `ngrok http http://127.0.0.1:8080 --inspect=false` after configuring ngrok's free account. See [Ngrok setup](NGROK.md) for the fixed address and existing-phone update steps. Keep both processes and the laptop awake and online.
 
-Copy the HTTPS URL and the full bank fingerprint from **Device setup**. The operator key is only for the console; never enter it as a phone password. The laptop needs internet, not Bluetooth.
+In **Device setup**, confirm the HTTPS URL and generate the bank setup QR. Scan it on the phone or download it and select its image; this fills the URL and fingerprint together. Manual entry remains available. The operator key is only for the console; never enter it as a phone password. The laptop needs internet, not Bluetooth.
 
 ## 2. Create your accounts online
 
@@ -16,9 +16,9 @@ On a fresh phone choose **Create account**:
 
 - Phone A: **Personal**, your name, a unique ID such as `sam@beyondnet`, and a password of at least eight characters.
 - Phone B: **Merchant**, your shop name, a unique ID such as `shop@beyondnet`, and its own password.
-- On both, enter the same bank HTTPS URL and trust fingerprint. Compare the fingerprint with the laptop before continuing.
+- On both, scan/select the same bank setup QR, or enter the same bank HTTPS URL and trust fingerprint. Compare the fingerprint with the laptop before continuing.
 
-Both account types can act as relays. There is no relay or gateway account to select. Set a screen lock/PIN on the paying phone.
+Both account types can act as relays. There is no relay or gateway account to select. Set a screen lock on the paying phone. While online, tap **Set payment PIN** and choose a separate six-digit demo PIN, authenticated with your account password.
 
 ## 3. Add demo money
 
@@ -26,7 +26,7 @@ On Phone A tap **Add demo money**, enter ₹1,000 and confirm. New accounts star
 
 ## 4. First try online
 
-Keep both phones online. Phone B taps **Show my payment QR**. Phone A taps **Scan QR**, or **Pay by ID → enter shop@beyondnet → Find recipient**. Enter ₹10, review and authorize using the phone’s screen lock/biometrics.
+Keep both phones online. Phone B taps **Show my payment QR**. Phone A taps **Scan QR**, or **Pay by ID → enter shop@beyondnet → Find recipient**. Enter ₹10, review, enter your demo payment PIN, and authorize using the phone’s screen lock/biometrics.
 
 Expect **Payment confirmed** with a bank reference on Phone A, an incoming receipt on Phone B, and the matching payment plus debit/credit entries in the laptop console. Online submission/status uses WSS; HTTPS recovery is automatic if the live connection is interrupted. No Bluetooth is needed for this step.
 
@@ -47,12 +47,12 @@ Sign up another **Personal** or **Merchant** account, enable relay, then turn it
 
 ## 7. Recovery checks
 
-Interrupt gateway internet and restore it within the 15-minute authorization window. Repeat with relay disconnect/reconnect and app restart (enable relay again after restart). The original request ID must produce at most one debit; receipt recovery should finish the original payment.
+Interrupt gateway internet and restore it within the 10-minute authorization window. Repeat with relay disconnect/reconnect and app restart (enable relay again after restart). The original request ID must produce at most one debit; receipt recovery should finish the original payment.
 
 An expired request without a receipt is **Outcome not yet known** because the bank may already have committed it. Do not create a replacement until you recover/check that outcome. Reconnecting the sender online automatically attempts recovery.
 
 Record actual phone models, OS versions, payment ID, bank reference, connectivity and observed latency. Automated tests model radio exchanges; this physical test is still required. iPhone work remains deferred.
 
-## Mixed APK compatibility test
+## APK compatibility
 
-Leave BeyondNet 1.1.0 on an Android 12+ phone and install 1.1.1 on an Android 10+ phone. Enroll both with the same bank URL and fingerprint; no server restart is needed. Fund the sender online. First make a small online payment and confirm its bank receipt. Then enable relay on both, turn the sender's internet off, leave the gateway online and perform a nearby payment. Match the payment ID, amount and bank reference in the sender receipt, recipient receipt and bank ledger. Repeat with the phones' roles reversed. Keep both apps open and clocks synchronized. This is the required real-phone acceptance check, not something the automated suite claims to have performed.
+Use 1.2.1 on both phones; 1.2.0 retains compatible PIN-authorized payments. Completed old payments remain recoverable, but new PIN-less requests from older APKs are rejected.

@@ -22,7 +22,10 @@ void main() {
     String account, {
     http.Client? client,
   }) async {
-    final e = BeyondNetEngine(client: client);
+    final e = BeyondNetEngine(
+      client: client,
+      authorizePayment: () async => true,
+    );
     await e.store.init(databasePath: '${directory.path}/$id.sqlite3');
     e.signing = await ed.newKeyPair();
     e.encryption = await x.newKeyPair();
@@ -60,6 +63,56 @@ void main() {
     relay.dispose();
     await directory.delete(recursive: true);
   });
+  test(
+    'Payment PIN is encrypted, never saved in intent, and TTL is 600 seconds',
+    () async {
+      sender.profile!['account']['pin_configured'] = true;
+      sender.profile!['trust']['box_key'] = fixture['box_public'];
+      sender.bankReachable = false;
+      sender.connectedPeer = relay.deviceId;
+      sender.nearby = [
+        {'device_id': relay.deviceId, 'at': nowSeconds},
+      ];
+      final id = await sender.pay(relay.certificate, 1000, pin: '123456');
+      while (sender.working) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      final intent = (await sender.store.payments()).single;
+      expect(intent['payment_id'], id);
+      expect(intent.containsKey('pin'), isFalse);
+      final p = (await sender.store.packets()).single;
+      final bankKey = await x.newKeyPairFromSeed(
+        base64Decode(fixture['box_seed']),
+      );
+      final signed = await openBox(
+        bankKey,
+        Map<String, dynamic>.from(p['box']),
+      );
+      final body = await verify(
+        base64Encode((await sender.signing.extractPublicKey()).bytes),
+        signed,
+      );
+      expect(body['v'], 2);
+      expect(body['pin'], '123456');
+      expect(body['expires_at'] - body['created_at'], 600);
+      expect(jsonEncode(intent).contains('123456'), isFalse);
+      expect(jsonEncode(p).contains('"pin"'), isFalse);
+    },
+  );
+
+  test('Payment requires PIN setup and six digits', () async {
+    await expectLater(
+      sender.pay(relay.certificate, 1000, pin: '123456'),
+      throwsStateError,
+    );
+    sender.profile!['account']['pin_configured'] = true;
+    await expectLater(
+      sender.pay(relay.certificate, 1000, pin: '123'),
+      throwsArgumentError,
+    );
+    expect(await sender.store.payments(), isEmpty);
+  });
+
   test(
     'Real engine authenticates peer command and ACKs only persisted packet',
     () async {

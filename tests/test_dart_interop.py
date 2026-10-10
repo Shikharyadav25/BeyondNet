@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from cryptography.hazmat.primitives.asymmetric import x25519
 import pytest
-from bank.crypto import unb64,open_box,verify,check_packet
+from tests.support.wire_oracle import unb64,open_box,verify,check_packet
 
 def test_python_decrypts_actual_dart_envelope():
     output=Path('mobile/build/dart-wire.json')

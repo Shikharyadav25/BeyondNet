@@ -1,0 +1,24 @@
+flowchart TB
+  subgraph BANK[Java bank]
+    A[1. JDK 21 + Maven + PostgreSQL] --> B[2. pom.xml + BankApplication]
+    B --> C[3. PostgreSQL schema + private configuration]
+    C --> D[4. JDBC transactions + advisory lock]
+    D --> E[5. Canonical JSON + Ed25519 + X25519/HKDF/AES-GCM]
+    E --> F[6. Accounts + trust + device certificates + PIN]
+    F --> G[7. Atomic settlement + idempotency + 600-second deadline]
+    G --> H[8. HTTP API + authenticated WebSocket + durable receipts]
+    H --> I[9. Dashboard + bank setup QR]
+  end
+  subgraph PHONE[Flutter Android app]
+    I --> J[10. Flutter dependencies + native Android setup]
+    J --> K[11. Matching crypto + SQLite queue + secure key storage]
+    K --> L[12. Permissions + BLE framing + authenticated peers]
+    L --> M[13. Routing engine + online gateway + receipt verification]
+    M --> N[14. Signup QR + PIN + Personal/Merchant screens]
+  end
+  subgraph VERIFY[Verify and deliver]
+    N --> O[15. Java + Flutter + independent interoperability tests]
+    O --> P[16. Build signed APK + launch bank and HTTPS tunnel]
+    P --> Q[Real two-phone test: offline sender → online gateway → bank]
+    Q --> R[Verify return receipt + one debit/credit; back up and package]
+  end

@@ -9,6 +9,9 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'engine.dart';
+import 'payment_pin.dart';
+import 'bank_setup_code.dart';
+import 'bank_setup_scan.dart';
 import 'protocol.dart';
 import 'nearby_permissions.dart';
 
@@ -19,8 +22,9 @@ const ink = Color(0xff143b3b),
     muted = Color(0xff788b86);
 String rupees(dynamic paise) => '₹${((paise as num) / 100).toStringAsFixed(2)}';
 String stamp(dynamic seconds) {
-  final d = DateTime.fromMillisecondsSinceEpoch((seconds as int) * 1000)
-      .toLocal();
+  final d = DateTime.fromMillisecondsSinceEpoch(
+    (seconds as int) * 1000,
+  ).toLocal();
   return '${d.day}/${d.month} · ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
 }
 
@@ -267,7 +271,15 @@ Future<void> alert(BuildContext c, Object error) async {
 class LoginPage extends StatefulWidget {
   final BeyondNetEngine engine;
   final bool renewal;
-  const LoginPage({super.key, required this.engine, this.renewal = false});
+  final Future<String?> Function()? scanBankCode;
+  final Future<String?> Function()? pickBankCode;
+  const LoginPage({
+    super.key,
+    required this.engine,
+    this.renewal = false,
+    this.scanBankCode,
+    this.pickBankCode,
+  });
   @override
   State<LoginPage> createState() => _LoginState();
 }
@@ -280,6 +292,8 @@ class _LoginState extends State<LoginPage> {
       name = TextEditingController();
   bool busy = false, visible = false, signup = true;
   String role = 'customer';
+  bool importingBank = false;
+  String? bankSetupStatus;
   @override
   void initState() {
     super.initState();
@@ -289,6 +303,16 @@ class _LoginState extends State<LoginPage> {
       account.text = widget.engine.accountId;
       fingerprint.text = widget.engine.trust['fingerprint'];
     }
+    if (Platform.isAndroid) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        try {
+          final raw = await recoverBankSetupImage();
+          if (raw != null && mounted) await reviewBankCode(raw);
+        } catch (error) {
+          if (mounted) await alert(context, error);
+        }
+      });
+    }
   }
 
   @override
@@ -297,6 +321,74 @@ class _LoginState extends State<LoginPage> {
       c.dispose();
     }
     super.dispose();
+  }
+
+  Future<void> reviewBankCode(String raw) async {
+    final code = BankSetupCode.parse(raw);
+    if (!mounted) return;
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Use this bank?'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Bank HTTPS URL'),
+              SelectableText(code.url),
+              const SizedBox(height: 12),
+              const Text('Bank fingerprint'),
+              SelectableText(code.fingerprint),
+              const SizedBox(height: 12),
+              const Text(
+                'Only use a setup QR from your trusted bank dashboard. The app will verify this fingerprint before sending account details.',
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(c, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(c, true),
+            child: const Text('Use bank details'),
+          ),
+        ],
+      ),
+    );
+    if (accepted == true && mounted) {
+      setState(() {
+        url.text = code.url;
+        fingerprint.text = code.fingerprint;
+        bankSetupStatus =
+            'Bank details filled from QR. Complete your account details below.';
+      });
+    }
+  }
+
+  Future<void> importBankCode(bool fromGallery) async {
+    setState(() => importingBank = true);
+    try {
+      final String? raw;
+      if (fromGallery) {
+        raw = await (widget.pickBankCode ?? pickBankSetupImage)();
+      } else {
+        raw = widget.scanBankCode != null
+            ? await widget.scanBankCode!()
+            : await Navigator.push<String>(
+                context,
+                MaterialPageRoute(builder: (_) => const BankSetupScanPage()),
+              );
+      }
+      if (raw != null && mounted) await reviewBankCode(raw);
+    } catch (error) {
+      if (mounted) await alert(context, error);
+    } finally {
+      if (mounted) setState(() => importingBank = false);
+    }
   }
 
   Future<void> submit() async {
@@ -402,6 +494,37 @@ class _LoginState extends State<LoginPage> {
                 ),
                 const SizedBox(height: 14),
               ],
+              const Text(
+                'Set up your bank',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 10,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: busy || importingBank
+                        ? null
+                        : () => importBankCode(false),
+                    icon: const Icon(Icons.qr_code_scanner),
+                    label: const Text('Scan bank QR'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: busy || importingBank
+                        ? null
+                        : () => importBankCode(true),
+                    icon: const Icon(Icons.photo_library_outlined),
+                    label: const Text('Choose QR image'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Hint(
+                bankSetupStatus ??
+                    'Scan or choose the bank setup QR to fill both fields, or enter them manually.',
+              ),
+              const SizedBox(height: 14),
               TextField(
                 controller: url,
                 keyboardType: TextInputType.url,
@@ -447,7 +570,8 @@ class _LoginState extends State<LoginPage> {
                 maxLines: 2,
                 decoration: const InputDecoration(
                   labelText: 'Bank trust fingerprint',
-                  hintText: 'Paste the 64-character fingerprint from Device setup on the laptop',
+                  hintText:
+                      'Paste the 64-character fingerprint from Device setup on the laptop',
                 ),
               ),
               const SizedBox(height: 10),
@@ -456,7 +580,7 @@ class _LoginState extends State<LoginPage> {
               ),
               const SizedBox(height: 20),
               FilledButton(
-                onPressed: busy ? null : submit,
+                onPressed: busy || importingBank ? null : submit,
                 child: busy
                     ? const SizedBox(
                         width: 20,
@@ -578,6 +702,14 @@ class _ShellState extends State<Shell> {
   Widget home() => ListView(
     padding: const EdgeInsets.fromLTRB(23, 12, 23, 28),
     children: [
+      if (!e.pinConfigured) ...[
+        FilledButton.icon(
+          onPressed: () => open(PaymentPinPage(engine: e)),
+          icon: const Icon(Icons.lock_outline),
+          label: const Text('Set payment PIN while online'),
+        ),
+        const SizedBox(height: 16),
+      ],
       Text(
         'Hello, ${e.account!['name'].toString().split(' ').first}',
         style: const TextStyle(fontSize: 15, color: muted),
@@ -1314,6 +1446,12 @@ class _ShellState extends State<Shell> {
               child: const Text('Renew login / update bank URL'),
             ),
             TextButton(
+              onPressed: () => open(PaymentPinPage(engine: e)),
+              child: Text(
+                e.pinConfigured ? 'Change payment PIN' : 'Set payment PIN',
+              ),
+            ),
+            TextButton(
               onPressed: () => openAppSettings(),
               child: const Text('Open device permissions'),
             ),
@@ -1357,7 +1495,7 @@ class _ShellState extends State<Shell> {
         'BeyondNet is a demo bank system. Payments settle only when a gateway reaches the bank. A relay acknowledgment is not proof of payment. Bluetooth relay runs while the app is open.',
       ),
       const SizedBox(height: 20),
-      const Center(child: Eyebrow('BEYONDNET · VERSION 1.1.1')),
+      const Center(child: Eyebrow('BEYONDNET · VERSION 1.2.1')),
     ],
   );
   Future<void> editPeers() async {
@@ -1573,45 +1711,22 @@ class _PayState extends State<PayPage> {
       if (value < 1 || value > 1000000) {
         throw ArgumentError('Enter ₹0.01 to ₹10,000.');
       }
-      final approved = await showDialog<bool>(
+      if (!widget.engine.pinConfigured) {
+        throw StateError(
+          'Open Settings and set your payment PIN while online first.',
+        );
+      }
+      final enteredPin = await showDialog<String>(
         context: context,
-        builder: (c) => AlertDialog(
-          title: const Text('Confirm demo payment'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                rupees(value),
-                style: const TextStyle(
-                  fontSize: 32,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 14),
-              Text(
-                'To ${selected!['body']['display_name'] ?? selected!['body']['account_id']}',
-              ),
-              const SizedBox(height: 12),
-              const Hint(
-                'This request is valid for 15 minutes. It may remain pending while it travels. Your device lock authorizes the payment; the bank confirms the result.',
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(c, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(c, true),
-              child: const Text('Authorize'),
-            ),
-          ],
+        builder: (_) => PaymentPinDialog(
+          amount: value,
+          recipient:
+              selected!['body']['display_name'] ??
+              selected!['body']['account_id'],
         ),
       );
-      if (approved != true) return;
-      final id = await widget.engine.pay(selected!, value);
+      if (enteredPin == null) return;
+      final id = await widget.engine.pay(selected!, value, pin: enteredPin);
       if (mounted) {
         Navigator.pushReplacement(
           context,

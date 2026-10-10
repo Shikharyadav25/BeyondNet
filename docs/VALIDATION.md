@@ -1,58 +1,52 @@
-# BeyondNet 1.1.1 — Android 10 compatibility validation
+# Validation and source audit — 10 October 2026
 
-Updated 9 October 2026.
+Current phone release: **1.2.1+6**, Android 10+. Current backend: Java 21+ / Spring Boot 4.1.1 / PostgreSQL. Maven artifact remains `bank-1.2.0.jar`.
 
-- Minimum supported phone API: Android 10 / API 29. Android 12+ still uses Nearby devices permissions; Android 10–11 uses foreground Location permission and requires the Location switch on before scanning. No GPS coordinates are read or sent by BeyondNet.
-- App suite: **34 passed**, including seven new permission tests for API 29/30/31+, denied permissions, Location off, incomplete grants and unavailable/unsupported API levels.
-- Bank checks: **21 passed** across the main suite and the Dart interoperability check after its test vector was generated.
-- Static analysis: **No issues found**.
-- Android release build: **Passed**, 1.1.1/build 4, minimum SDK 29, target SDK 36, ARM32 / ARM64 / x86_64 libraries. APK archive integrity and signature verification with minimum SDK 29 passed; the Android SDK-version channel is present in the APK. Signing certificate SHA-256 matches 1.1.0: `87631ca5716266c5e82f64acff27185b6b1d84bd126128546545847427a07ff2`.
-- APK SHA-256: `2dc5bd61dd60bc66eb3efef727a7bfc711535315416932559758a68fc7c237bd`.
-- Compatibility: bank code, protocol, payment engine, local store and the previous release's Python/Dart wire fixture are byte-for-byte unchanged from the 1.1.0 source archive. The existing 1.1.0 APK can continue to share the same bank and mesh with 1.1.1; no bank restart is needed.
-- Android 10 hardware, native authorization and physical exchange between old/new APKs are **not yet verified**. No Android phone or emulator is connected/available on this Mac. This release has software and packaging validation, not physical radio acceptance.
-
-The earlier release evidence below is retained as historical context.
-
----
-
-# BeyondNet 1.1.0 validation
-
-Updated 6 October 2026. Software evidence is separate from physical radio acceptance.
+## Checks after organization
 
 | Check | Result |
 |---|---|
-| Bank suite | **21 passed**: cryptography, settlement, duplicate recovery, concurrency, signup, top-ups, live receipt delivery and authentication |
-| Flutter suite | **27 passed**: protocol/framing, durable queues, signed RPCs, receipt verification, new screens, connectivity states, funding recovery and live bank integration |
-| Flutter static analysis | **No issues found** |
-| Dart-to-Python live integration | Passed against a real temporary loopback bank: signup → zero balance → funding → encrypted payment → matching sender/merchant receipts → HTTPS fallback |
-| UI previews | Passed: actual signup, online/offline home, merchant home, funding and receipt widgets rendered at phone size |
-| Bank console | Passed: actual HTML/CSS/JS rendered with isolated rehearsal state; responsive layout, title and JavaScript checks |
-| Python/console syntax | Passed |
-| Android 1.1.0 build 3 | **Passed**: version 1.1.0/build 3, BeyondNet label, unchanged application ID/signing certificate, ARM32/ARM64/x86_64 Flutter libraries, and native connectivity method/permission verified. Checksum in `installers/SHA256SUMS.txt` |
-| Physical installation / BLE | **Not performed for this release**: Android device inventory is empty |
-| iPhone | Deferred at the user’s request; no signed/verified iPhone release claimed |
-| Real UPI | Not implemented; all balances and funding are demo money |
+| Maven package and PostgreSQL Java suite | **21 passed**: 19 bank tests + 2 setup-QR tests, zero failures/errors/skips |
+| Flutter analyzer | No issues |
+| Flutter suite | **44 passed**, including actual Dart engine against Java/PostgreSQL |
+| Independent API/wire/migration suite | **5 passed**, using temporary identities and isolated test schemas |
 
-## What the tests establish
+Additional checks: rebuilt JAR dashboard/login/setup-QR generation and download passed in a browser with no JavaScript errors; local and public ngrok health both report Java/PostgreSQL and the preserved bank fingerprint. Verified all original table counts, account balances, ledger sum and bank-key/operator-file hashes against the migration baseline after restart. All current local documentation links resolve.
 
-Bank tests exercise atomic debit/credit posting, insufficient-funds persistence, re-encrypted duplicate instructions, changed-ID conflicts, concurrent spending, tampered payloads/signatures, expired authorization, mailbox recovery, restarts and revocation. New tests cover customer/merchant signup, rejected relay account types, zero starting balances, funding bounds/authentication, concurrent duplicate top-ups, changed-amount conflicts and durable funding recovery.
+Total: **70 automated tests passed** after backend paths/resources and test fixtures were reorganized. Live bank accounts were not used for test payments. The legacy migration fixture contains only synthetic public test data and is restored into an isolated schema; the removed Python bank is not needed.
 
-WebSocket tests submit real encrypted instructions, verify both parties’ receipts, reconnect and replay persisted receipts, reject invalid sessions and other users’ devices, detect revocation, and retry bank-paused requests using the original packet. Any enrolled customer can forward another customer’s packet; no relay-specific account is required.
+Covered behavior includes canonical wire/signature interoperability, immediate payment settlement, PIN setup/privacy/lock/replay, duplicate submissions and re-encryption, conflicting payment IDs, overspending races, separate bank-instance concurrency, tampering, 600-second expiry and late recovery of committed decisions, v1 authorization downgrade refusal, restart persistence, idempotent funding, revocation, atomic rollback when receipts fail, low-order key rejection, migration refusal into a nonempty target, and QR parsing/validation/UI.
 
-The Flutter suite runs the actual Dart engine against the actual Python bank using isolated temporary accounts/data. It uses test-only loopback HTTP/WS redirection and a mocked device authorization result; the production app enforces HTTPS/WSS and native device authentication. This validates code interoperability, not physical Bluetooth, real mobile TLS/proxy configuration or biometric hardware.
+## Organized source
 
-Other mobile tests cover QR/ID recipient validation, stale balance protection, top-up response loss and saved request IDs, authenticated RPCs, paged inventories, persistence, forged/mismatched receipt rejection, old relay acknowledgments arriving after confirmation, expired unknown outcomes, offline connection gating, and Android-reported offline versus reachable-but-paused-bank states. Screen tests verify the two signup types, online payment without relay, merchant receiving, offline setup and offline funding restrictions.
+- `backend/` contains all executable bank code in Java and standard packaged resources, including the dashboard.
+- Removed old FastAPI modules/launchers, Python server requirements/tests, obsolete reconstruction guides, unfinished iPhone runner/install helper, unused preview generators and duplicate old APKs.
+- Exact removed files were preserved privately in `data/backups/source-cleanup-20261010-183729/removed-source.zip` before removal. This archive is excluded from source distribution.
+- Python remains for independent test support, installation/download/package utilities; no Python bank server remains.
+- The Java SQLite importer is retained for old-bank data preservation. Android SQLite is retained for its offline queue/history. Live bank storage is PostgreSQL only.
+- Existing application ID, certificate, BLE UUIDs, wire domain, bank identity and private data are preserved. Internal compatibility names are intentional.
+- Build/dependency caches remain locally ignored and excluded from the clean source ZIP. They are useful local tool state, not product source.
 
-## Physical acceptance still required
+## Existing Android artifact
 
-Follow [First payment](FIRST_PAYMENT.md) on actual Android 12+ devices:
+`installers/BeyondNet-Android-1.2.1.apk` is the already-built current release; `BeyondNet-Android.apk` is an alias. Organization changes no mobile payment behavior and does not require a replacement APK.
 
-1. Create Personal and Merchant accounts online; fund the sender.
-2. Complete an online payment and match both receipts to the bank ledger.
-3. Enable relay on both phones, disable sender internet, scan/connect and complete the two-phone BLE payment.
-4. Repeat with an optional offline middle phone and explicit allowlists.
-5. Test Bluetooth permission denial, radio off/on, gateway/relay loss, app restart, authorization expiry and receipt recovery.
+SHA-256: `a73f813741f08587f4b21b3cce63c731c827205027981e6cd4516e014b9952de`.
 
-Record phone models, OS versions, payment ID, bank reference and observed latency. Verify one debit and one credit for each successful payment (funding has its own separately identified ledger pair). Keep apps visible. Radio range, throughput, battery behavior and background delivery have not been established.
+API minimum 29, target 36, compile 37. Existing signing certificate SHA-256: `87631ca5716266c5e82f64acff27185b6b1d84bd126128546545847427a07ff2`. Distribution uses a development signing certificate; source ZIP does not contain its secret key.
 
-`docs/screenshots/` contains actual rendered UI with sample data. Screenshots and software-modeled hops are not proof of a hardware payment. The APK is signed with the existing development key for in-place demo upgrades.
+## Limits of this check
+
+This is a source review and functional test pass, not an independent security audit or certification for real-money use. Actual phone BLE exchange, multi-hop range/reliability, native authorization and camera/gallery acceptance still need physical devices. No real UPI, Wi-Fi mesh, iPhone release or unattended background relay is claimed. The local bank/tunnel requires the laptop awake and online.
+
+See [BUILD_FLOW.md](BUILD_FLOW.md) for the complete developer order and [FIRST_PAYMENT.md](FIRST_PAYMENT.md) for hardware acceptance.
+
+## Neon deployment validation
+
+The production ledger was transferred to the separate free Neon BeyondNet project. All values in all eleven public tables and bank-key/operator-file hashes were verified, then rechecked after the bank restarted and the local PostgreSQL service stopped. Remote JDBC and dump/cleanup connections verify TLS certificates and hostnames. Dashboard login/setup-QR and the public HTTPS bank endpoint passed; the existing APK requires no update.
+
+The independent API/WebSocket/wire/migration suite passed all five checks on Neon after fixing its cleanup helper to prefer the installed PostgreSQL 18 client over the older PostgreSQL 14 client on PATH. Actual Dart signup/funding/payment/receipt integration also passed on Neon.
+
+The full Java run passed twenty tests; its late-receipt recovery test initially failed because its two-second first-submission allowance expired during remote database round trips. The test now uses one timestamp and a thirty-second first-commit allowance, then still waits for authorization expiry before recovering the committed receipt. This changes only test timing, not the production 600-second deadline or payment behavior. The targeted late-receipt rerun passed (54.89 seconds), so all 21 Java checks have now passed on Neon across the full run and this corrected rerun.
+
+The cloud recovery branch `migration-backup-2026-10-10` was created and every original row was verified there too. Retired local PostgreSQL/SQLite storage, local database dump copies and unused runtime JAR copies were deleted, freeing **196.4 MiB**. Local PostgreSQL is stopped and no longer exists; local helpers do not recreate it with Neon configured. The public bank endpoint still works with the same fingerprint after deletion. A user-triggered rehearsal during migration added separate demo records in Neon without changing the original rows.

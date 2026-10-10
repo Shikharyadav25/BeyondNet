@@ -1,6 +1,6 @@
 # Wire protocol v1
 
-Implementation: `mobile/lib/protocol.dart`, `mobile/lib/ble_transport.dart`, `mobile/lib/engine.dart`, and `bank/crypto.py`. Test vectors in `mobile/test/fixtures` contain **public test-only private keys**, not bank or user credentials.
+Implementation: `mobile/lib/protocol.dart`, `mobile/lib/ble_transport.dart`, `mobile/lib/engine.dart`, and `backend/src/main/java/com/beyondnet/bank/WireCrypto.java`. Test vectors in `mobile/test/fixtures` contain **public test-only private keys**, not bank or user credentials.
 
 ## Canonical representation
 
@@ -43,13 +43,14 @@ A payment forward increments hop count and appends the forwarding device ID if a
 
 | Field | Meaning |
 |---|---|
-| `v` | 1 |
+| `v` | 2 (payment body); envelope and receipts remain v1 |
 | `payment_id` | UUID; reused on every retry |
 | `sender`, `recipient` | Demo bank account IDs |
 | `amount` | Integer paise, 1–1,000,000 |
 | `currency` | INR |
-| `created_at`, `expires_at` | Authorization window, at most 900 seconds |
+| `created_at`, `expires_at` | Authorization window, at most 600 seconds |
 | `device_id` | Registered signing device |
+| `pin` | Six numeric digits inside bank-encrypted signed body; never stored in plaintext |
 | `sender_mailbox`, `recipient_mailbox` | Separate cryptographically random receipt capabilities |
 
 The bank verifies the sender/device binding, signature, exact field set, ID, amount/currency, authorization window, and envelope agreement. It hashes the signed body for idempotency. The sender mailbox and expiry in the outer envelope must match the signed inner values. The original encrypted payload is not re-signed by relays.
@@ -110,7 +111,7 @@ Sync exchanges inventories, pulls up to eight missing packets, and pushes up to 
 
 ## Retention
 
-- Payment authorization: 15 minutes.
+- New payment authorization: 10 minutes (600 seconds); saved legacy decisions remain recoverable.
 - Receipt propagation: 7 days from bank decision.
 - Expired packet cache: retained for a further 7 days for recovery, bounded by storage capacity.
 - Own intent and receipt history: retained until app data is removed.
@@ -119,12 +120,24 @@ Sync exchanges inventories, pulls up to eight missing packets, and pushes up to 
 
 Expiry is not a financial rejection unless the bank signs that decision. If no receipt arrives, the outcome remains unknown.
 
-## Version 1.1 online and discovery additions
+## Online and discovery endpoints
 
 `POST /api/signup`: account, name, password, role (`customer` or `merchant`). `POST /api/topups`: integer paise amount (100–1,000,000) plus UUID request_id; authenticated, account-scoped idempotency. `GET /api/recipients/{payment_id}` returns an active bank-signed certificate.
 
-WSS `/api/live` first frame: `{token, device_id}`. Server replies `{type: ready, fingerprint}`. Submit `{type: submit, id, packet}`; receive `{type: result, id, duplicate, receipts}` or `{type: error, id, status, message}`. Server also emits `{type: account, account}` and `{type: receipts, receipts, cursor}`. Inbox receipts are durable and replayed on reconnect; local packet IDs deduplicate repeats. `GET /api/receipts/{device_id}?after=cursor` provides authenticated owner-only HTTP recovery. Existing mailbox recovery is retained for relays. Payment/receipt cryptographic formats are unchanged.
+WSS `/api/live` first frame: `{token, device_id}`. Server replies `{type: ready, fingerprint}`. Submit `{type: submit, id, packet}`; receive `{type: result, id, duplicate, receipts}` or `{type: error, id, status, message}`. Server also emits `{type: account, account}` and `{type: receipts, receipts, cursor}`. Inbox receipts are durable and replayed on reconnect; local packet IDs deduplicate repeats. `GET /api/receipts/{device_id}?after=cursor` provides authenticated owner-only HTTP recovery. Existing mailbox recovery is retained for relays. The envelope and receipt formats are retained; current new payment bodies require v2 with an encrypted demo PIN.
 
 Live frames are capped at 16 KiB (authentication 4 KiB), 120 client messages/minute/connection, ten seconds to authenticate. Signup/login are limited to 12/minute per observed IP. The proxy must support WebSocket upgrades; production app endpoints are HTTPS/WSS only.
 
 BLE inventory responses add an advisory `online` boolean. `resolve` with `account_id` asks a connected peer for a cached certificate or an online bank lookup; response is `{op: recipient, certificate}` (null if unknown). The recipient certificate is verified independently against bank trust. This lookup does not recursively traverse arbitrary relays; scan QR if the ID cannot be resolved. Older peers can still exchange payment packets but may not support ID resolution.
+
+
+## Java 1.2.0 authorization and storage
+
+`POST /api/pin` requires an account session and `{password,pin}` to set/reset a six-digit demo PIN. Account snapshots include `pin_configured`. Five distinct incorrect PIN requests temporarily lock payment authorization for ten minutes; repeating one request recovers the same rejection without consuming more attempts.
+
+The bank uses PostgreSQL, one transaction per decision and a transaction-scoped per-bank advisory lock. First submissions after the signed 600-second deadline are rejected. Duplicate lookup precedes expiry/PIN decisions, so already-committed requests retain their original encrypted receipts. A changed body with the same sender/payment ID conflicts. New v1 PIN-less payments are rejected; previously stored v1 decisions remain recoverable after migration. Phone SQLite continues storing offline queues; PIN is omitted from local intent/history.
+
+
+## Bank setup QR
+
+Setup QRs encode public JSON: `{"type":"beyondnet-bank-setup","v":1,"bank_url":"https://bank.example","fingerprint":"<64 hex characters>"}`. These are distinct from recipient payment QRs and contain no account secrets. The app accepts only an HTTPS origin without credentials, paths, query or fragments and a valid full fingerprint. Camera and selected-image paths share the same parser and review step. Enrollment verifies actual bank key material against the imported fingerprint before sending signup/login credentials. The operator-authenticated `POST /api/admin/setup-qr` accepts `bank_url` and generates a PNG using the bank's own fingerprint, never a client-supplied fingerprint.

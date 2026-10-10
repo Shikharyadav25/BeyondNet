@@ -1,0 +1,22 @@
+digraph Payment {
+ graph[rankdir=TB,bgcolor="#f5f7fb",pad="0.3",ranksep="0.35",fontname="Arial",label="BeyondNet · runtime payment and receipt flow",labelloc=t,fontsize=22];
+ node[shape=box,style="rounded,filled",fillcolor="white",color="#b8c7df",fontname="Arial",fontsize=13,margin="0.18,0.12"];
+ edge[fontname="Arial",fontsize=11,color="#536b89",arrowsize=0.7];
+ a[label="Enrolled sender selects recipient + amount\nDemo PIN + native device authentication"];
+ b[label="Sign body v2, encrypt only for bank\nSave ciphertext + redacted intent atomically\nAuthorization expires after 600 seconds"];
+ c[shape=diamond,label="Bank reachable\non sender?"];
+ d[label="Authenticated WSS / HTTPS",fillcolor="#effaf4"];
+ e[label="Connect to verified nearby phone\nBLE store-and-forward ciphertext\nOptional relays, maximum 4 hops",fillcolor="#effaf4"];
+ f[label="Online enrolled gateway submits over WSS / HTTPS\nBank never participates in Bluetooth",fillcolor="#effaf4"];
+ g[label="Bank validates packet, GCM tag + enrolled device signature"];
+ h[label="PostgreSQL transaction + advisory lock\nLook up sender/payment ID and canonical body hash"];
+ i[shape=diamond,label="Recorded\ninstruction?"];
+ j[label="Same body: return saved receipts\nChanged body: conflict; no second debit"];
+ k[label="New instruction: check deadline, PIN, revocation and funds"];
+ l[label="Commit success or rejection immediately\nSuccess: balances + paired ledger entries\nDecision + encrypted signed receipts commit together"];
+ m[label="Deliver durable receipts to gateway\nRecover by inbox / mailbox after disconnection"];
+ n[label="Return over nearby route or direct internet\nPrefer reverse path; alternatives allowed",fillcolor="#effaf4"];
+ o[label="Phone decrypts, verifies bank signature\nMatches original payment; saves confirmed / rejected outcome"];
+ p[label="If no receipt: outcome remains unknown\nRecover original request before creating a replacement",fillcolor="#fff8e9"];
+ a->b->c;c->d[label="Yes"];c->e[label="No"];e->f;d->g;f->g;g->h->i;i->j[label="Yes"];i->k[label="No"];k->l;j->m[label="Matching replay"];l->m->n->o;n->p[label="Route unavailable",style=dashed];
+}

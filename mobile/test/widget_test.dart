@@ -77,6 +77,7 @@ void main() {
         'name': 'Sam',
         'role': merchant ? 'merchant' : 'customer',
         'balance': 0,
+        'pin_configured': true,
         'revision': 0,
       },
       'balance_checked_at': 1,

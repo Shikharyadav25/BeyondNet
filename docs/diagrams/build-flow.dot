@@ -1,0 +1,32 @@
+digraph Build {
+  graph [rankdir=TB,bgcolor="#f5f7fb",pad="0.3",nodesep="0.25",ranksep="0.35",fontname="Arial",label="BeyondNet · build from the bank contract to the Android app",labelloc=t,fontsize=22];
+  node [shape=box,style="rounded,filled",fontname="Arial",fontsize=13,margin="0.2,0.12",color="#b8c7df",fillcolor="white"];
+  edge [color="#536b89",arrowsize=0.7];
+  subgraph cluster_bank {
+    label="JAVA BANK · private persistent identity + PostgreSQL";fontname="Arial";fontsize=15;color="#b8c7df";style=rounded;
+    a[label="1  Install JDK 21+, Maven and PostgreSQL"];
+    b[label="2  pom.xml + BankApplication\nSpring Boot entry point and packaged resources"];
+    c[label="3–4  Schema + BankDatabase\nJDBC, transactions, advisory lock and unique payment ID"];
+    d[label="5  WireCrypto\nCanonical JSON → Ed25519 signature\nX25519 → HKDF → AES-256-GCM"];
+    e[label="6–7  BankService\nAccounts, device certificates, PIN and funding\nAtomic settlement, replay recovery, 600-second authorization"];
+    f[label="8–9  HTTP + WebSocket + dashboard\nDurable encrypted receipts + bank URL/fingerprint QR"];
+    a->b->c->d->e->f;
+  }
+  subgraph cluster_phone {
+    label="FLUTTER ANDROID · foreground nearby transport";fontname="Arial";fontsize=15;color="#76b6a0";style=rounded;
+    g[label="10  Flutter + native Android runner\nSDK, permissions, screen-lock authentication",fillcolor="#effaf4"];
+    h[label="11  protocol.dart + LocalStore\nMatching crypto, durable SQLite queue, secure key storage",fillcolor="#effaf4"];
+    i[label="12  BleTransport + signed RPC\nScan/connect, bounded frames, peer verification",fillcolor="#effaf4"];
+    j[label="13–14  BeyondNetEngine + screens\nCiphertext forwarding, online gateway, receipt verification\nPersonal/Merchant signup, QR and PIN",fillcolor="#effaf4"];
+    g->h->i->j;
+  }
+  subgraph cluster_verify {
+    label="VERIFY → BUILD → PHYSICAL DEMO → PRESERVE";fontname="Arial";fontsize=15;color="#d5b77b";style=rounded;
+    k[label="15  Java + Dart + independent wire tests\nDuplicates, races, expiry, tamper, rollback and recovery",fillcolor="#fff8e9"];
+    l[label="16  Build APK; start Java bank + HTTPS/WSS tunnel\nEnroll and fund two phones online",fillcolor="#fff8e9"];
+    m[label="Turn sender internet off; connect to online phone\nBLE ciphertext → gateway → internet-only bank",fillcolor="#fff8e9"];
+    n[label="Verify returning signed receipt + exactly one debit/credit\n17  Back up private state; package clean source",fillcolor="#fff8e9"];
+    k->l->m->n;
+  }
+  f->g;j->k;
+}

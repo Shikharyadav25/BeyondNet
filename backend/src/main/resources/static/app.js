@@ -1,0 +1,287 @@
+const $ = (id) => document.getElementById(id);
+let token = sessionStorage.getItem('karo-admin') || '';
+let snapshot = null;
+let busy = false;
+
+const money = (n) =>
+  new Intl.NumberFormat('en-IN', {
+    style: 'currency',
+    currency: 'INR',
+    maximumFractionDigits: 2,
+  }).format(n / 100);
+
+const esc = (s) =>
+  String(s ?? '').replace(
+    /[&<>"']/g,
+    (c) =>
+      ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+      })[c]
+  );
+
+async function api(path, body) {
+  const r = await fetch(path, {
+    method: body ? 'POST' : 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+
+  if (r.status === 401) {
+    sessionStorage.removeItem('karo-admin');
+    $('login').showModal();
+    throw new Error('Operator key required');
+  }
+
+  const d = await r.json();
+  if (!r.ok) {
+    throw new Error(d.detail || 'Bank connection failed');
+  }
+  return d;
+}
+
+function rows(target, items, render, cols) {
+  $(target).innerHTML = items.length
+    ? items.map(render).join('')
+    : `<tr><td colspan="${cols}" class="muted">No entries yet. Run a rehearsal or send a payment from your phone.</td></tr>`;
+}
+
+function render(s) {
+  snapshot = s;
+  const paid = s.payments.filter((p) => p.status === 'paid');
+
+  $('paid-count').textContent = s.metrics?.paid_count ?? paid.length;
+  $('volume').textContent = money(
+    s.metrics?.volume ?? paid.reduce((x, p) => x + p.amount, 0)
+  );
+  $('devices-count').textContent = s.devices.length;
+  $('connection-state').textContent = s.online ? 'Accepting' : 'Paused';
+  $('connection-text').textContent = s.online
+    ? 'Bank accepting requests'
+    : 'Bank submissions paused';
+  $('connection-dot').className = 'dot' + (s.online ? '' : ' off');
+  $('toggle-bank').textContent = s.online
+    ? 'Pause submissions'
+    : 'Resume submissions';
+  $('fingerprint').textContent = s.trust.fingerprint;
+
+  if (!$('setup-bank-url').value) {
+    $('setup-bank-url').value =
+      location.protocol === 'https:'
+        ? location.origin
+        : sessionStorage.getItem('beyondnet-bank-url') || s.public_url || '';
+  }
+
+  $('accounts').innerHTML = s.accounts
+    .map(
+      (a) =>
+        `<div class="account"><div class="avatar">${esc(
+          a.name.charAt(0)
+        )}</div><div><b>${esc(a.name)}</b><small>${esc(
+          a.id
+        )}</small></div><strong>${money(a.balance)}</strong></div>`
+    )
+    .join('');
+
+  const labels = {
+    account_created: 'Account created',
+    demo_money_added: 'Demo money added',
+    device_enrolled: 'Device enrolled',
+    bank_decision: 'Bank decision committed',
+    duplicate_recovered: 'Duplicate safely recovered',
+    device_revoked: 'Device revoked',
+  };
+
+  $('events').innerHTML =
+    s.events
+      .slice(0, 12)
+      .map(
+        (e) =>
+          `<div class="event"><span class="icon">${
+            e.kind === 'bank_decision' ? '↗' : '◈'
+          }</span><div><b>${esc(labels[e.kind] || e.kind)}</b><p>${esc(
+            e.detail.account || e.detail.payment_id || e.detail.device_id
+          )} ${
+            e.detail.status ? `· ${esc(e.detail.status)}` : ''
+          }</p></div><time>${new Date(e.at * 1000).toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+          })}</time></div>`
+      )
+      .join('') || '<p class="muted">Waiting for the first enrolled device.</p>';
+
+  rows(
+    'payment-rows',
+    s.payments,
+    (p) =>
+      `<tr><td>${esc(p.id.slice(0, 8))}</td><td>${esc(p.sender)} → ${esc(
+        p.recipient
+      )}</td><td>${money(p.amount)}</td><td><span class="${p.status}">${esc(
+        p.status
+      )}</span>${
+        p.reason ? `<div class="muted">${esc(p.reason)}</div>` : ''
+      }</td><td>${esc(p.bank_ref)}</td></tr>`,
+    5
+  );
+
+  rows(
+    'ledger-rows',
+    s.ledger,
+    (l) =>
+      `<tr><td>${esc(l.payment)}</td><td>${esc(l.account)}</td><td style="color:${
+        l.delta < 0 ? '#bc7450' : '#07875e'
+      }">${l.delta > 0 ? '+' : ''}${money(l.delta)}</td><td>${money(
+        l.balance_after
+      )}</td><td>${new Date(l.committed * 1000).toLocaleString()}</td></tr>`,
+    5
+  );
+
+  $('device-list').innerHTML =
+    s.devices
+      .map(
+        (d) =>
+          `<div>${esc(d.account)} · <code>${esc(d.id)}</code> ${
+            d.revoked ? '· Revoked' : ''
+          }</div>`
+      )
+      .join('') || '<p class="muted">No enrolled devices yet.</p>';
+}
+
+async function refresh() {
+  if (!token || busy) return;
+  try {
+    render(await api('/api/admin/state'));
+    $('error').hidden = true;
+  } catch (e) {
+    $('error').textContent = e.message;
+    $('error').hidden = false;
+  }
+}
+
+$('login-form').onsubmit = async (e) => {
+  e.preventDefault();
+  token = $('admin-key').value.trim();
+  try {
+    render(await api('/api/admin/state'));
+    sessionStorage.setItem('karo-admin', token);
+    $('login').close();
+    $('login-error').textContent = '';
+  } catch (err) {
+    $('login-error').textContent = err.message;
+  }
+};
+
+$('lock').onclick = () => {
+  token = '';
+  sessionStorage.removeItem('karo-admin');
+  $('login').showModal();
+};
+
+document.querySelectorAll('nav button').forEach((b) => {
+  b.onclick = () => {
+    document.querySelectorAll('nav button').forEach((n) => {
+      n.classList.toggle('active', n === b);
+    });
+    document.querySelectorAll('.view').forEach((v) => {
+      v.hidden = v.id !== b.dataset.view;
+    });
+    $('heading').textContent = {
+      overview: 'Bank overview',
+      payments: 'Payment decisions',
+      ledger: 'Account ledger',
+      setup: 'Device setup',
+    }[b.dataset.view];
+  };
+});
+
+$('toggle-bank').onclick = async () => {
+  try {
+    await api('/api/admin/connection', { online: !snapshot.online });
+    await refresh();
+  } catch (e) {
+    $('error').textContent = e.message;
+    $('error').hidden = false;
+  }
+};
+
+$('rehearse').onclick = async () => {
+  busy = true;
+  $('rehearse').disabled = true;
+  $('rehearse').textContent = 'Running encrypted payment…';
+  try {
+    const d = await api('/api/admin/rehearsal', {});
+    $('rehearsal-panel').hidden = false;
+    $('rehearsal').innerHTML = d.trace
+      .map((x) => `<div class="trace"><span>✓</span>${esc(x)}</div>`)
+      .join('');
+  } catch (e) {
+    $('error').textContent = e.message;
+    $('error').hidden = false;
+  } finally {
+    busy = false;
+    $('rehearse').disabled = false;
+    $('rehearse').textContent = '▶ Run software rehearsal';
+    await refresh();
+  }
+};
+
+if (token) {
+  refresh();
+} else {
+  $('login').showModal();
+}
+setInterval(refresh, 2500);
+
+let bankQrObjectUrl = null;
+
+function clearBankQr() {
+  if (bankQrObjectUrl) {
+    URL.revokeObjectURL(bankQrObjectUrl);
+  }
+  bankQrObjectUrl = null;
+  $('setup-qr-result').hidden = true;
+}
+
+$('setup-bank-url').addEventListener('input', clearBankQr);
+
+$('generate-bank-qr').onclick = async () => {
+  clearBankQr();
+  $('setup-qr-error').textContent = '';
+  $('generate-bank-qr').disabled = true;
+  $('setup-bank-url').disabled = true;
+
+  try {
+    const bankUrl = $('setup-bank-url').value.trim();
+    const response = await fetch('/api/admin/setup-qr', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ bank_url: bankUrl }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || 'Could not generate QR');
+    }
+
+    bankQrObjectUrl = URL.createObjectURL(await response.blob());
+    $('setup-bank-qr').src = bankQrObjectUrl;
+    $('download-bank-qr').href = bankQrObjectUrl;
+    $('setup-qr-origin').textContent = bankUrl;
+    $('setup-qr-result').hidden = false;
+    sessionStorage.setItem('beyondnet-bank-url', bankUrl);
+  } catch (error) {
+    $('setup-qr-error').textContent = error.message;
+  } finally {
+    $('generate-bank-qr').disabled = false;
+    $('setup-bank-url').disabled = false;
+  }
+};

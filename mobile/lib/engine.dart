@@ -56,6 +56,7 @@ class BeyondNetEngine extends ChangeNotifier {
   bool? internet;
   bool bankReachable = false, checkingConnection = false;
   bool get isMerchant => account?['role'] == 'merchant';
+  bool get pinConfigured => account?['pin_configured'] == true;
   String? connectedPeer;
   bool get canPay =>
       bankReachable ||
@@ -624,7 +625,29 @@ class BeyondNetEngine extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<String> pay(Json recipient, int amount) async {
+  Future<void> setPaymentPin(String password, String pin) async {
+    if (!bankReachable) {
+      throw StateError('Connect to the bank to set your payment PIN.');
+    }
+    if (!RegExp(r'^[0-9]{6}$').hasMatch(pin)) {
+      throw ArgumentError('Use a six-digit payment PIN.');
+    }
+    final result = await request(
+      '/api/pin',
+      body: {'password': password, 'pin': pin},
+    );
+    applyAccount(Map<String, dynamic>.from(result['account']));
+    await saveProfile();
+    notifyListeners();
+  }
+
+  Future<String> pay(Json recipient, int amount, {required String pin}) async {
+    if (!pinConfigured) {
+      throw StateError('Set your payment PIN online before paying.');
+    }
+    if (!RegExp(r'^[0-9]{6}$').hasMatch(pin)) {
+      throw ArgumentError('Enter your six-digit payment PIN.');
+    }
     if (!canPay) {
       throw StateError(
         'Connect to the bank or a verified nearby relay before paying.',
@@ -660,15 +683,17 @@ class BeyondNetEngine extends ChangeNotifier {
       throw StateError('Payment authorization was cancelled.');
     }
     final id = const Uuid().v4();
+    final createdAt = nowSeconds;
     final body = {
-      'v': 1,
+      'v': 2,
+      'pin': pin,
       'payment_id': id,
       'sender': accountId,
       'recipient': beneficiary['account_id'],
       'amount': amount,
       'currency': 'INR',
-      'created_at': nowSeconds,
-      'expires_at': nowSeconds + 900,
+      'created_at': createdAt,
+      'expires_at': createdAt + 600,
       'device_id': deviceId,
       'sender_mailbox': randomCapability(),
       'recipient_mailbox': randomCapability(),
@@ -680,7 +705,8 @@ class BeyondNetEngine extends ChangeNotifier {
       body['expires_at'] as int,
     );
     await store.createPayment(p, {
-      ...body,
+      for (final entry in body.entries)
+        if (entry.key != 'pin') entry.key: entry.value,
       'name': beneficiary['display_name'] ?? beneficiary['account_id'],
       'packet_id': p['id'],
       'state': 'queued',
