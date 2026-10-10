@@ -2,7 +2,6 @@
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import argparse
-import html
 import socket
 
 ROOT = Path(__file__).resolve().parents[1]

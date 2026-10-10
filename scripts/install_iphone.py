@@ -2,7 +2,6 @@
 from pathlib import Path
 import argparse
 import json
-import os
 import plistlib
 import re
 import shutil

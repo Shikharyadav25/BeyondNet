@@ -70,13 +70,13 @@ flutter run --release -d <device-id>
 
 Build an Android APK with `flutter build apk --release`. Build a signed iOS archive through Xcode or `flutter build ipa` after provisioning. `flutter build ios --simulator --debug` checks a simulator build but cannot validate BLE.
 
-The Android manifest includes internet, scan/connect/advertise, camera, and biometric permissions. Minimum API is 31 to keep the demo’s permissions predictable. `FlutterFragmentActivity` and AppCompat themes support native device authentication. iOS includes Bluetooth, camera, and Face ID descriptions plus keychain entitlements. No background modes are claimed.
+The Android manifest includes internet, scan/connect/advertise, camera, biometric, and Android 10–11 foreground-location permissions. Minimum API is 29. `FlutterFragmentActivity` and AppCompat themes support native device authentication. iOS includes Bluetooth, camera, and Face ID descriptions plus keychain entitlements. No background modes are claimed.
 
 Do not replace the app with a browser/PWA to run the radio test: the required cross-platform GATT server functionality is native.
 
 ## Tests
 
-BeyondNet 1.1.0 keeps the previous native app IDs and wire protocol for in-place Android upgrades. The Dart package is now `beyondnet`, and user-facing names in the app, native runners, bank console, launch helpers, and documentation are BeyondNet.
+BeyondNet 1.1.1 keeps the previous native app IDs and wire protocol for in-place Android upgrades. The Dart package is `beyondnet`, and user-facing names in the app, native runners, bank console, launch helpers, and documentation are BeyondNet.
 
 From the project root:
 

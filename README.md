@@ -66,7 +66,7 @@ Two phones are enough: offline personal user and online merchant with relay enab
    ngrok http http://127.0.0.1:8080 --inspect=false
    ```
 
-4. Keep both processes running and the laptop awake and online. Use the HTTPS URL and the fingerprint from the console’s **Device setup** page on every phone. See [Ngrok setup](docs/NGROK.md) for this laptop's address and how to update existing phones. Cloudflare Quick Tunnel remains an alternative with a temporary address.
+4. Keep both processes running and the laptop awake and online. Use the HTTPS URL and the fingerprint from the console’s **Device setup** page on every phone. See [Ngrok setup](docs/NGROK.md) for this laptop's address and how to update existing phones.
 5. Install the separately provided **BeyondNet-Android.apk**. Create one Personal and one Merchant account while online. Fund the personal account, then try an online payment before the offline two-phone flow above.
 
 Use the updated bank source with this APK. Existing bank data and app installations are preserved; legacy accounts remain usable through **Sign in**, and previous relay account records become personal accounts. Internal app IDs remain unchanged for upgrades. Do not uninstall to update if you need your history and device keys.

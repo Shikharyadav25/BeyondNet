@@ -34,7 +34,7 @@ The supplied architecture was Android-only with Spring Boot/PostgreSQL. The requ
 
 ## Account types, funding and connectivity
 
-Version 1.1.0 has customer/personal and merchant accounts. Relay is an opt-in capability on either, with automatic gateway operation whenever internet and the bank are reachable. Signup creates a zero-balance account. Funding uses a persistent `(account, request_id)` key, an atomic account credit and offsetting `demo-funding` ledger entry. The phone saves an unresolved top-up ID before sending it.
+Version 1.1.1 has customer/personal and merchant accounts. Relay is an opt-in capability on either, with automatic gateway operation whenever internet and the bank are reachable. Signup creates a zero-balance account. Funding uses a persistent `(account, request_id)` key, an atomic account credit and offsetting `demo-funding` ledger entry. The phone saves an unresolved top-up ID before sending it.
 
 Android reports validated internet connectivity through a native method channel. The app separately verifies bank reachability/trust on launch, resume and every five seconds. A bank outage is not reported as internet being off. Online own payments submit without enabling Bluetooth. Offline new payments require a recently verified, explicitly selected nearby peer. Existing saved packets keep retrying even after a route disappears.
 

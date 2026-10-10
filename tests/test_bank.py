@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from fastapi.testclient import TestClient
 from bank.app import create_app
-from bank.crypto import seal, sign, packet, public, verify, canonical
+from bank.crypto import seal, sign, packet, public
 from bank.demo import DemoDevice, rehearse
 
 @pytest.fixture

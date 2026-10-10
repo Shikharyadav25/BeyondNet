@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
-from bank.crypto import canonical, b64, unb64, public, private, sign, verify, seal, open_box, packet, check_packet
+from bank.crypto import canonical, unb64, public, private, sign, verify, seal, open_box, packet, check_packet
 from bank.db import Database, password_hash
 
 class Login(BaseModel):
