@@ -195,7 +195,7 @@ Create [nearby_permissions.dart](../mobile/lib/nearby_permissions.dart) and [ble
 - Persist opaque ciphertext, deduplicate by packet ID, increment routing hop metadata on forwarding and enforce the four-hop bound. The bank does not trust route hints for financial authorization.
 - Receipt exchange prioritizes the recorded reverse route, with alternate eligible paths when a phone has left. Four hops and ten minutes are different bounds: one limits replication, the other financial authorization.
 
-This is **application-level store-and-forward over BLE**, not the standardized Bluetooth Mesh networking stack. Wi-Fi Direct mesh and unattended background relaying are not implemented. All participants need enrolled devices and the app open. Physical range and advertising support must be measured on actual phones.
+This is **application-level store-and-forward over BLE**, not the standardized Bluetooth Mesh networking stack. Version 1.3.0 adds [relay_routing.dart](../mobile/lib/relay_routing.dart), [background_relay.dart](../mobile/lib/background_relay.dart) and native `RelayEngineHost`/`RelayService`: durable custody ACKs, path/trail loop avoidance, shorter-route updates, bounded fanout and one retained engine in a notification-backed Android foreground service. Enabled phones may close/lock the screen. Wi-Fi Direct remains future work; measure physical range, power and advertising support on actual phones. See [BACKGROUND_RELAY.md](BACKGROUND_RELAY.md).
 
 ## 13. Connect payments, internet gateways and receipts in the engine
 
@@ -253,7 +253,7 @@ Output: `mobile/build/app/outputs/flutter-apk/app-release.apk`. Confirm version,
 1. From the project root run `./start-bank.sh`. On this Mac it connects to Neon (fresh local setups can start local PostgreSQL), builds Java if needed and runs an immutable JAR copy. Keep this window open.
 2. Open `http://localhost:8080`. Read the operator key with `cat data/admin-token.txt`, then unlock the dashboard.
 3. In another terminal run `./Start-Ngrok.command` if ngrok is not already running. Keep it open. This laptop's assigned address is saved locally; use the URL from the running tunnel. The laptop must stay awake and online.
-4. Generate a bank setup QR in Device setup. Install APK 1.2.1 on two Android 10+ phones; scan/select the QR. Signup/enroll online, configure demo PIN and fund the payer.
+4. Generate a bank setup QR in Device setup. Install APK 1.3.0 on Android 10+ phones; scan/select the QR. Signup/enroll online, configure demo PIN and fund the payer. Use three phones to demonstrate an offline intermediate; see [BACKGROUND_RELAY.md](BACKGROUND_RELAY.md).
 5. First prove a small online payment. Match payment ID, bank reference, receipt and balances across both phones/dashboard.
 6. Keep the second phone online with relay enabled and visible. Turn off internet on the payer, leave Bluetooth enabled, grant required permissions, scan and connect. Pay by ID or recipient QR.
 7. Confirm the returned bank-signed receipt on the payer, incoming receipt on the merchant, and exactly one debit/credit on the bank. The laptop need not be near either phone.
@@ -267,4 +267,4 @@ Stop with Ctrl+C and restart with the same launch command; PostgreSQL and key fi
 
 Run `python3 scripts/package_source.py`; output is `dist/BeyondNet-source.zip`. Do not distribute `data/`, signing keys, SDK paths, caches or private backups. The cleaned project no longer contains the Python bank or unfinished iPhone source. The local cleanup archive in `data/backups/` preserves removed files without putting obsolete runtime code into the source package.
 
-Future work: physical multi-hop acceptance and reliability metrics, background relay design, Wi-Fi transport, production signing/key recovery, scalable database locking/pooling, deployment/monitoring, independent security review, and authorized real payment integration. None is completed merely by this folder cleanup.
+Future work: physical background/multi-hop acceptance and reliability/power metrics, Wi-Fi transport, production signing/key recovery, scalable database locking/pooling, deployment/monitoring, independent security review and authorized real payment integration. Android background relay is implemented in 1.3.0.

@@ -34,7 +34,7 @@ The phone is a native Flutter app using an authenticated BLE GATT protocol. The 
 
 ## Account types, funding and connectivity
 
-Version 1.2.1 has customer/personal and merchant accounts. Relay is an opt-in capability on either, with automatic gateway operation whenever internet and the bank are reachable. Signup creates a zero-balance account. Funding uses a persistent `(account, request_id)` key, an atomic account credit and offsetting `demo-funding` ledger entry. The phone saves an unresolved top-up ID before sending it.
+Version 1.3.0 has customer/personal and merchant accounts. Relay is an opt-in capability on either, with automatic gateway operation whenever internet and the bank are reachable. Signup creates a zero-balance account. Funding uses a persistent `(account, request_id)` key, an atomic account credit and offsetting `demo-funding` ledger entry. The phone saves an unresolved top-up ID before sending it.
 
 Android reports validated internet connectivity through a native method channel. The app separately verifies bank reachability/trust on launch, resume and every five seconds. A bank outage is not reported as internet being off. Online own payments submit without enabling Bluetooth. Offline new payments require a recently verified, explicitly selected nearby peer. Existing saved packets keep retrying even after a route disappears.
 
@@ -100,7 +100,7 @@ Signing inside the small demo transaction removes the need for a separate outbox
 
 ## Persistence and restart
 
-Bank identity lives under `data/` (or `KARO_DATA_DIR`); this deployment stores its PostgreSQL ledger on Neon. The retired local cluster has been removed. Phone intents and ciphertext queues live in application SQLite; key seeds and the login session use secure storage. Restarting the app reconstructs receipt delivery from retained ciphertext, then the user explicitly starts Nearby relay again. Relay does not silently restart in the background. Online connectivity monitoring and direct own-payment recovery restart automatically while the app is open.
+Bank identity lives under `data/` (or `KARO_DATA_DIR`); this deployment stores its PostgreSQL ledger on Neon. Phone intents/ciphertext/custody ACKs live in SQLite; key seeds and login session use secure storage. One application-scoped Flutter engine is retained by the enabled Android foreground service, independently of Activity attachment. Restart restores prior opt-in and cached signed receipts. Notification Stop persists opt-out; Bluetooth-off pauses, on resumes. There is no boot receiver; reopen after reboot/force-stop. Physical-device background acceptance remains required. See [BACKGROUND_RELAY.md](BACKGROUND_RELAY.md).
 
 Receipts live for seven days; new requests are authorized for 10 minutes. Expired payment packets remain cached for seven more days to support mailbox recovery, but are no longer submitted as new authorizations or forwarded. Permanent own payment history is preserved. There is no automatic cancellation or refund feature.
 

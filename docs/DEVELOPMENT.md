@@ -10,7 +10,7 @@ From the project root:
 ./start-bank.sh
 ```
 
-Manual backend build: `mvn -f backend/pom.xml package`. With PostgreSQL configured, run `java -jar backend/target/bank-1.2.0.jar` from the project root. The versioned JAR name is independent of phone version 1.2.1. Dashboard: `http://localhost:8080`. Custom Java port: `--server.port=8081`.
+Manual backend build: `mvn -f backend/pom.xml package`. With PostgreSQL configured, run `java -jar backend/target/bank-1.2.0.jar` from the project root. The versioned JAR name is independent of phone version 1.3.0. Dashboard: `http://localhost:8080`. Custom Java port: `--server.port=8081`.
 
 Build Android:
 

@@ -1,8 +1,24 @@
 # Validation and source audit — 10 October 2026
 
-Current phone release: **1.2.1+6**, Android 10+. Current backend: Java 21+ / Spring Boot 4.1.1 / PostgreSQL. Maven artifact remains `bank-1.2.0.jar`.
+Current phone release: **1.3.0+7**, Android 10+. Current backend: Java 21+ / Spring Boot 4.1.1 / PostgreSQL. Maven artifact remains `bank-1.2.0.jar`.
 
-## Checks after organization
+## Background relay and reliability checks
+
+| Check | Result |
+|---|---|
+| Flutter analyzer | No issues |
+| Flutter tests excluding live integration | **60 passed** |
+| Actual Dart / Java / Neon integration | **1 passed**, including offline A → offline B → two competing online gateways and receipts back to A |
+| Android service tests, API 29 and 34 | **10 passed**, zero failures/errors/skips |
+| Focused Java / PostgreSQL financial safety tests | **6 passed**, zero failures/errors/skips |
+
+**77 tests passed for this change.** The live test uses production signing, encryption, routing, storage and the packaged Java bank with isolated Neon schemas. It disables internet on the payer/intermediate in the controlled transport, submits the same request concurrently through two gateways, verifies identical receipts and one debit, and returns the result through the offline intermediate. It does not use a physical Bluetooth radio or production accounts.
+
+Fault tests cover loop avoidance, lost custody ACKs, incomplete frames, durable restart, v1 queue migration, shorter routes, alternate receipt routes, bounded fanout and lease recovery, fair queues, expiry, tampering, full storage and legacy inventories. Android tests check saved opt-in, sticky restart, task removal, notification Stop and Bluetooth pause/resume; they replace Flutter JNI only. Focused bank tests cover concurrent duplicates, overspending, separate-instance database locking, tampering, expired requests and atomic receipt-failure rollback.
+
+See [BACKGROUND_RELAY.md](BACKGROUND_RELAY.md) for implementation, reproducible commands and the physical-phone acceptance procedure. The original organization/migration validation below is historical and separate from these 77 checks.
+
+## Earlier checks after organization (release 1.2.1)
 
 | Check | Result |
 |---|---|
@@ -27,17 +43,17 @@ Covered behavior includes canonical wire/signature interoperability, immediate p
 - Existing application ID, certificate, BLE UUIDs, wire domain, bank identity and private data are preserved. Internal compatibility names are intentional.
 - Build/dependency caches remain locally ignored and excluded from the clean source ZIP. They are useful local tool state, not product source.
 
-## Existing Android artifact
+## Android artifact
 
-`installers/BeyondNet-Android-1.2.1.apk` is the already-built current release; `BeyondNet-Android.apk` is an alias. Organization changes no mobile payment behavior and does not require a replacement APK.
+`installers/BeyondNet-Android-1.3.0.apk` is the current release; `BeyondNet-Android.apk` is an alias. Install the new APK over the existing app on every phone in the test chain. Do not uninstall or clear app data. The prior 1.2.1 APK is retained for reference. Bank URL, fingerprint, API and stored ledger are unchanged; no backend restart is needed for this update.
 
-SHA-256: `a73f813741f08587f4b21b3cce63c731c827205027981e6cd4516e014b9952de`.
+Current APK SHA-256: `d192be52ff0fc5dc4c2d764f83aaa5c147dd23af8c4ac17174c6c8226cabbf5b`, also recorded in `installers/SHA256SUMS.txt`. APK signature verification and packaged version/service/permission checks passed; the certificate matches the previous release for in-place updates. Previous 1.2.1 SHA-256: `a73f813741f08587f4b21b3cce63c731c827205027981e6cd4516e014b9952de`.
 
 API minimum 29, target 36, compile 37. Existing signing certificate SHA-256: `87631ca5716266c5e82f64acff27185b6b1d84bd126128546545847427a07ff2`. Distribution uses a development signing certificate; source ZIP does not contain its secret key.
 
 ## Limits of this check
 
-This is a source review and functional test pass, not an independent security audit or certification for real-money use. Actual phone BLE exchange, multi-hop range/reliability, native authorization and camera/gallery acceptance still need physical devices. No real UPI, Wi-Fi mesh, iPhone release or unattended background relay is claimed. The local bank/tunnel requires the laptop awake and online.
+This is a source review and functional test pass, not an independent security audit or certification for real-money use. No phones were connected: physical BLE range, background/locked-screen delivery, manufacturer battery restrictions, native authorization and camera/gallery acceptance still need device testing. Background relay is implemented as an explicitly enabled Android foreground service with a notification, not guaranteed execution after force-stop, reboot or OS termination. No real UPI, Wi-Fi mesh or iPhone release is claimed. The local bank/tunnel requires the laptop awake and online. Historical endpoint health checks below do not establish that the bank/tunnel is currently running.
 
 See [BUILD_FLOW.md](BUILD_FLOW.md) for the complete developer order and [FIRST_PAYMENT.md](FIRST_PAYMENT.md) for hardware acceptance.
 

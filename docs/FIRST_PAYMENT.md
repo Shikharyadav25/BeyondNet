@@ -1,6 +1,6 @@
 # Your first BeyondNet payment (Android)
 
-Use the **1.2.1 APK** with the Java/PostgreSQL bank. Keep the existing bank identity and import its ledger using [current setup](SPRING_BOOT_SETUP.md). Install over the existing app so local keys/history are retained.
+Use the **1.3.0 APK** with the Java/PostgreSQL bank. Install over the existing app to retain keys/history. See [background relay and controlled three-phone acceptance](BACKGROUND_RELAY.md); the existing bank identity needs no update.
 
 ## 1. Laptop
 
@@ -32,12 +32,12 @@ Expect **Payment confirmed** with a bank reference on Phone A, an incoming recei
 
 ## 5. Try the same payment offline
 
-1. Enable **Help as a nearby relay** / **Nearby relay** on both phones. Allow Nearby devices on Android 12+, or Location while using the app with Location switched on for Android 10–11; turn Bluetooth on, and keep both apps visible.
+1. Enable **Help as a nearby relay** / **Nearby relay** while visible. Allow Nearby devices on Android 12+, or Location while using the app with Location on for Android 10–11. Turn Bluetooth on and confirm the relay notification.
 2. Keep Phone B’s internet on. It automatically forwards nearby requests to the bank.
 3. Turn Phone A’s Wi-Fi and mobile data off, leaving Bluetooth on. The home screen shows **Your internet is off** after the connectivity check.
 4. Tap **Set up offline payments → Scan for nearby phones**. Wait for a bank-verified phone to appear, then tap **Connect**.
 5. Pay using the saved merchant ID or its QR. New IDs can be resolved through the connected relay when its directory or online bank access is available; otherwise use QR.
-6. Keep both apps open until the bank-signed receipt returns. Compare its reference and amount with the laptop ledger.
+6. The relay phone may leave the app or lock its screen. Compare the returned signed receipt with the laptop ledger. Stop relay afterward; it uses battery.
 
 Camera permission is required only for QR scanning. No manual Bluetooth pairing is needed. “Connected” means the nearby phone was authenticated recently; it does not guarantee an internet route. “On its way” means pending, not paid.
 
@@ -47,7 +47,7 @@ Sign up another **Personal** or **Merchant** account, enable relay, then turn it
 
 ## 7. Recovery checks
 
-Interrupt gateway internet and restore it within the 10-minute authorization window. Repeat with relay disconnect/reconnect and app restart (enable relay again after restart). The original request ID must produce at most one debit; receipt recovery should finish the original payment.
+Interrupt gateway internet and restore it within the 10-minute window. Repeat relay disconnect/reconnect, background screen removal and restart. A running service retains the queue and saved opt-in; after reboot/force-stop reopen the app. The original request ID must produce at most one debit.
 
 An expired request without a receipt is **Outcome not yet known** because the bank may already have committed it. Do not create a replacement until you recover/check that outcome. Reconnecting the sender online automatically attempts recovery.
 
@@ -55,4 +55,4 @@ Record actual phone models, OS versions, payment ID, bank reference, connectivit
 
 ## APK compatibility
 
-Use 1.2.1 on both phones; 1.2.0 retains compatible PIN-authorized payments. Completed old payments remain recoverable, but new PIN-less requests from older APKs are rejected.
+Use 1.3.0 throughout the chain for the stronger routing and background service. Versions 1.2.0/1.2.1 retain compatible PIN-authorized payment envelopes but lack the new background/path-trail behaviour. Old PIN-less new authorizations are rejected; completed old payments remain recoverable.

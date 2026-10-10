@@ -2,11 +2,11 @@
 
 # Final APK and command guide
 
-Release: **BeyondNet 1.2.1, build 6**. Android **10 or newer**. Demo funds only; no real UPI/bank integration. Use the Java/PostgreSQL bank in this source release.
+Release: **BeyondNet 1.3.0, build 7**. Android **10 or newer**. Demo funds only; no real UPI/bank integration. See [background relay and three-phone acceptance](BACKGROUND_RELAY.md).
 
 ## 1. Install the APK
 
-Copy/download `installers/BeyondNet-Android-1.2.1.apk` onto each phone, open it, and allow installation from your browser/file manager when Android asks. Install over the existing BeyondNet app; do not uninstall first if you need its keys/history. Existing users choose Sign in. The current release adds setup-QR import and retains the encrypted PIN payment behavior.
+Copy/download `installers/BeyondNet-Android-1.3.0.apk` onto each phone and allow installation from that source when Android asks. Install over the existing app; do not uninstall or clear data. Existing enrollment remains valid. Enable relay once while visible; its notification-backed service continues with the screen closed. Bank restart, URL and fingerprint changes are unnecessary for this update.
 
 Optional USB installation, with phones unlocked, USB debugging enabled and the laptop authorized:
 
@@ -93,13 +93,13 @@ First keep both phones online. Show Phone B's payment QR, scan it on Phone A or 
 
 Then:
 
-1. Enable nearby relay on both phones; turn Bluetooth on and keep both apps visible.
+1. Enable nearby relay while both apps are visible; turn Bluetooth on and confirm the service notification.
 2. Android 12+ needs Nearby devices permission. Android 10–11 needs foreground Location permission and Location switched on. The app does not read coordinates. Camera permission is only for live QR scanning.
 3. Keep Phone B online. Turn off mobile data and internet Wi-Fi on Phone A, leaving Bluetooth on.
 4. On A scan for nearby devices and connect to verified B. Pay using B's saved ID or payment QR.
-5. Keep both apps open until the receipt returns. Verify **one** debit/credit and the same payment reference in the dashboard.
+5. Phone B can leave the app or lock its screen while forwarding. Verify **one** debit/credit and the same payment reference in the dashboard. Stop relay when finished; it consumes battery.
 
-Two phones are enough. Extra offline relay phones are optional. BLE advertising support and real radio range vary by phone. Wi-Fi Direct mesh and background relay are not implemented.
+Two phones are enough; extra offline relays form chains. BLE support and range vary by phone. Background relay is implemented; force-stop, reboot and battery restrictions can interrupt it. Reopen after reboot to resume saved opt-in. Wi-Fi Direct mesh is future work.
 
 “On its way” means pending. The signed authorization lasts **10 minutes**; a reachable payment processes immediately. An already-paid transfer is not canceled by a late receipt. If the outcome is unknown, recover/check the original payment before making a replacement.
 

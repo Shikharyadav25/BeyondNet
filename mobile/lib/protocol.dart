@@ -128,9 +128,23 @@ Future<void> checkPacket(Json p) async {
       p['path'].length > 8) {
     throw const FormatException('Invalid routing metadata');
   }
+  for (final name in ['path', 'trail']) {
+    final value = p[name];
+    if (name == 'trail' && value == null) {
+      continue; // v1 peers remain compatible.
+    }
+    if (value is! List ||
+        value.length > (name == 'trail' ? 4 : 8) ||
+        (name == 'trail' && value.length > p['hops']) ||
+        value.any((id) => id is! String || id.isEmpty || id.length > 80) ||
+        value.toSet().length != value.length) {
+      throw const FormatException('Invalid routing history');
+    }
+  }
   if (p['expires_at'] is! int ||
       p['mailbox'] is! String ||
-      p['mailbox'].length < 32) {
+      p['mailbox'].length < 32 ||
+      p['mailbox'].length > 100) {
     throw const FormatException('Invalid routing fields');
   }
 }

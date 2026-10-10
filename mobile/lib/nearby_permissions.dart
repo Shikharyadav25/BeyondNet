@@ -22,6 +22,9 @@ class NearbyPermissions {
           'Allow Nearby devices in Settings to discover, connect and relay.',
         );
       }
+      // Optional: Android permits an FGS without this grant, but allowing it
+      // makes the notification's Stop relay control visible in the drawer.
+      if (sdk >= 33) await Permission.notification.request();
     } else {
       final status = await Permission.locationWhenInUse.request();
       if (!status.isGranted) {

@@ -50,7 +50,7 @@ Then rerun `flutter build apk --release`. Build success must be confirmed before
 
 ## New signup and live updates
 
-Use the current Java bank with APK 1.2.1. A 404 on signup/top-up usually means an older bank process is running. IDs must use `3-to-32-characters@beyondnet`; existing IDs sign in as before. A duplicate signup after an interrupted enrollment can be completed through Sign in. New accounts need Add demo money before spending.
+Use the current Java bank with APK 1.3.0. A 404 on signup/top-up usually means an older bank process is running. IDs must use `3-to-32-characters@beyondnet`; existing IDs sign in as before. A duplicate signup after an interrupted enrollment can be completed through Sign in. New accounts need Add demo money before spending.
 
 If WSS is blocked by a proxy, HTTPS recovery still works; allow WebSocket upgrades for live status. Internet is off means Android reports no validated internet route. Cannot reach the bank can instead mean a stopped bank, paused service, expired login, stale tunnel URL or trust mismatch. Offline payments still need a verified nearby peer; they cannot settle until a gateway reaches the bank.
 

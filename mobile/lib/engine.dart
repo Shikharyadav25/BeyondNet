@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -11,6 +12,8 @@ import 'package:uuid/uuid.dart';
 import 'protocol.dart';
 import 'store.dart';
 import 'ble_transport.dart';
+import 'relay_routing.dart';
+import 'background_relay.dart';
 
 class BankFailure implements Exception {
   final int status;
@@ -26,15 +29,21 @@ class BeyondNetEngine extends ChangeNotifier {
   final http.Client httpClient;
   final Future<bool> Function()? authorizePayment;
   final Future<WebSocket> Function(String)? socketConnector;
+  final BackgroundRelay? background;
   BeyondNetEngine({
     http.Client? client,
     this.authorizePayment,
     this.socketConnector,
-  }) : httpClient = client ?? http.Client();
+    PeerTransport? transport,
+    BackgroundRelay? backgroundRelay,
+  }) : httpClient = client ?? http.Client(),
+       _radio = transport,
+       background =
+           backgroundRelay ?? (Platform.isAndroid ? BackgroundRelay() : null);
   final LocalAuthentication auth = LocalAuthentication();
   late SimpleKeyPair signing, encryption;
-  BleTransport? _radio;
-  BleTransport get radio => _radio ??= BleTransport(handleRpc, (s) {
+  PeerTransport? _radio;
+  PeerTransport get radio => _radio ??= BleTransport(handleRpc, (s) {
     unawaited(log(s));
   });
   Json? profile;
@@ -52,6 +61,9 @@ class BeyondNetEngine extends ChangeNotifier {
   List<String> allowlist = [];
   int queueSize = 0;
   bool gateway = false, relay = false, working = false, ready = false;
+  bool relayEnabled = false, backgroundActive = false;
+  String? relayBlocked;
+  bool _relayTransition = false;
   String network = 'Checking connection…';
   bool? internet;
   bool bankReachable = false, checkingConnection = false;
@@ -83,8 +95,11 @@ class BeyondNetEngine extends ChangeNotifier {
   final Map<String, DateTime> peerRetry = {};
   final Map<String, int> peerFailures = {};
   final Map<String, String> identityByRadio = {};
-  Future<void> init() async {
-    await store.init();
+  final Map<String, int> _offeredPackets = {};
+  final Random _jitter = Random();
+  int _peerRound = 0;
+  Future<void> init({String? databasePath}) async {
+    await store.init(databasePath: databasePath);
     final saved = await secure.read(key: 'profile');
     if (saved != null) {
       profile = Map<String, dynamic>.from(jsonDecode(saved));
@@ -108,6 +123,8 @@ class BeyondNetEngine extends ChangeNotifier {
     }
     await reload();
     ready = true;
+    background?.listen(restoreBackgroundRelay);
+    await restoreBackgroundRelay();
     if (profile != null) startMonitoring();
     notifyListeners();
   }
@@ -744,20 +761,74 @@ class BeyondNetEngine extends ChangeNotifier {
   bool allowed(String id) => allowlist.isEmpty || allowlist.contains(id);
   Future<void> startRelay() async {
     if (profile == null) throw StateError('Enroll online first.');
+    if (_relayTransition) return;
+    _relayTransition = true;
+    try {
+      await background?.start();
+      relayEnabled = true;
+      await _startRadio();
+      relayBlocked = null;
+    } catch (error) {
+      relayEnabled = false;
+      relay = false;
+      await _radio?.stop();
+      await background?.stop();
+      rethrow;
+    } finally {
+      _relayTransition = false;
+      notifyListeners();
+    }
+    await restoreBackgroundRelay();
+    unawaited(tick());
+  }
+
+  Future<void> _startRadio() async {
+    if (certificate['body']['expires_at'] <= nowSeconds) {
+      throw StateError('Reconnect online to renew device enrollment.');
+    }
     await radio.start();
     relay = true;
     timer ??= Timer.periodic(const Duration(seconds: 5), (_) {
       unawaited(tick());
     });
-    notifyListeners();
-    unawaited(tick());
+  }
+
+  Future<void> restoreBackgroundRelay() async {
+    if (background == null || !ready || _relayTransition || _disposed) return;
+    _relayTransition = true;
+    try {
+      final status = await background!.ready();
+      relayEnabled = status['enabled'] == true;
+      backgroundActive = status['running'] == true;
+      relayBlocked = status['blocked'] as String?;
+      if (relayEnabled &&
+          backgroundActive &&
+          relayBlocked == null &&
+          profile != null) {
+        if (!relay || !radio.running) await _startRadio();
+      } else if (relay && _radio != null) {
+        relay = false;
+        await _radio!.stop();
+        connectedPeer = null;
+      }
+    } catch (error) {
+      relayBlocked = error.toString();
+      relay = false;
+      await _radio?.stop();
+    } finally {
+      _relayTransition = false;
+      if (!_disposed) notifyListeners();
+    }
   }
 
   Future<void> stopRelay() async {
+    await background?.stop();
+    relayEnabled = false;
+    backgroundActive = false;
     relay = false;
     connectedPeer = null;
     nearby.clear();
-    await radio.stop();
+    await _radio?.stop();
     await log('Nearby relay stopped. Saved payments are retained.');
   }
 
@@ -852,24 +923,60 @@ class BeyondNetEngine extends ChangeNotifier {
         if (offset is! int || offset < 0 || offset > 1000) {
           throw StateError('Invalid inventory cursor');
         }
-        final all =
-            (await store.packets()).map((p) => p['id'] as String).toList()
-              ..sort();
-        final ids = all.skip(offset).take(48).toList();
+        final all = (await store.packets())
+          ..sort((a, b) => (a['id'] as String).compareTo(b['id'] as String));
+        final page = all.skip(offset).take(48).toList();
+        final ids = page.map((p) => p['id']).toList();
         return {
           'op': 'inventory',
           'ids': ids,
           'next': offset + 48 < all.length ? offset + 48 : null,
           'device_id': deviceId,
           'online': bankReachable,
+          'routing': 2,
+          'routes': [
+            for (final p in page)
+              {'id': p['id'], 'hops': p['hops'], 'kind': p['kind']},
+          ],
         };
       case 'get':
         if (cmd['id'] is! String) throw StateError('Invalid packet request');
         final p = await store.packet(cmd['id']);
-        if (p == null || p['expires_at'] <= nowSeconds || p['hops'] >= 4) {
+        if (p == null ||
+            !RelayRouting.canForward(p, deviceId, peer['device_id'])) {
           return {'op': 'missing'};
         }
+        final custodians = await store.recentCustodians(p['id']);
+        if (cmd['online'] != true &&
+            !(p['kind'] == 'receipt' &&
+                p['path'].contains(peer['device_id'])) &&
+            !custodians.contains(peer['device_id']) &&
+            custodians.length >= RelayRouting.offlineFanout) {
+          return {'op': 'missing'};
+        }
+        _offeredPackets.removeWhere((_, at) => at < nowSeconds - 120);
+        if (_offeredPackets.length >= 1000) return {'op': 'missing'};
+        _offeredPackets['${peer['device_id']}:${p['id']}'] = nowSeconds;
         return {'op': 'packet', 'packet': forwarded(p)};
+      case 'ack':
+        final id = cmd['id'];
+        if (id is! String ||
+            id.length != 64 ||
+            (_offeredPackets['${peer['device_id']}:$id'] ?? 0) <
+                nowSeconds - 120) {
+          throw StateError('Unsolicited packet acknowledgement');
+        }
+        final p = await store.packet(id);
+        if (p != null) {
+          await store.acknowledge(
+            id,
+            peer['device_id'],
+            p['hops'] + 1,
+            p['expires_at'],
+          );
+        }
+        _offeredPackets.remove('${peer['device_id']}:$id');
+        return {'op': 'acknowledged', 'id': id};
       case 'put':
         final p = Map<String, dynamic>.from(cmd['packet']);
         await accept(p);
@@ -880,10 +987,7 @@ class BeyondNetEngine extends ChangeNotifier {
   }
 
   Json forwarded(Json p) {
-    final path = (p['path'] as List).cast<String>().toList();
-    if (p['kind'] == 'payment' && !path.contains(deviceId)) path.add(deviceId);
-    final clean = Map<String, dynamic>.from(p)..remove('uploaded');
-    return {...clean, 'hops': p['hops'] + 1, 'path': path};
+    return RelayRouting.forward(p, deviceId);
   }
 
   Future<void> accept(Json p) async {
@@ -891,8 +995,10 @@ class BeyondNetEngine extends ChangeNotifier {
     if (p['expires_at'] <= nowSeconds) {
       throw StateError('Packet retention expired');
     }
-    if (p['kind'] == 'receipt') await deliverReceipt(p);
     final inserted = await store.putPacket(p);
+    // Store before delivering or acknowledging. Crash recovery replays cached
+    // signed receipts, never loses a packet after a successful storage ACK.
+    if (p['kind'] == 'receipt') await deliverReceipt(p);
     if (inserted) {
       await log(
         'Stored encrypted ${p['kind']} packet ${p['id'].toString().substring(0, 8)}.',
@@ -955,64 +1061,156 @@ class BeyondNetEngine extends ChangeNotifier {
         return Map<String, dynamic>.from(checked['command']);
       }
 
-      final remoteIds = <String>[];
-      int? offset = 0;
-      bool peerOnline = false;
-      while (offset != null) {
-        final remote = await rpc({'op': 'inventory', 'offset': offset});
-        if (remote['op'] != 'inventory' ||
-            remote['ids'] is! List ||
-            remote['ids'].length > 48) {
-          throw StateError('Invalid inventory');
-        }
-        peerOnline = remote['online'] == true;
-        remoteIds.addAll((remote['ids'] as List).cast<String>());
-        final next = remote['next'];
-        if (next != null && (next is! int || next <= offset || next > 1000)) {
-          throw StateError('Invalid inventory cursor');
-        }
-        offset = next;
-      }
-      nearby.removeWhere((x) => x['device_id'] == peerIdentity!['device_id']);
-      nearby.add({
-        'device_id': peerIdentity!['device_id'],
-        'name': peerIdentity!['display_name'] ?? peerIdentity!['account_id'],
-        'rssi': peer.rssi,
-        'online': peerOnline,
-        'at': nowSeconds,
-      });
-      final local = await store.packets();
-      final ids = local.map((p) => p['id']).toSet();
-      // Fetch receipts first when known; pull a bounded inventory, then push missing packets.
-      for (final id in remoteIds.where((id) => !ids.contains(id)).take(8)) {
-        final value = await rpc({'op': 'get', 'id': id});
-        if (value['op'] == 'packet') {
-          await accept(Map<String, dynamic>.from(value['packet']));
-        }
-      }
-      final outgoing = local
-          .where((p) => !remoteIds.contains(p['id']) && p['hops'] < 4)
-          .toList();
-      outgoing.sort((a, b) {
-        int score(Json p) => p['kind'] == 'receipt'
-            ? (p['path'].contains(peerIdentity!['device_id']) ? 0 : 1)
-            : 2;
-        return score(a).compareTo(score(b));
-      });
-      for (final p in outgoing.take(8)) {
-        final response = await rpc({'op': 'put', 'packet': forwarded(p)});
-        if (response['op'] != 'stored' || response['id'] != p['id']) {
-          throw StateError('Peer did not acknowledge storage');
-        }
-        final localPayment = payments
-            .where((x) => x['packet_id'] == p['id'])
-            .firstOrNull;
-        if (localPayment != null &&
-            !['paid', 'rejected'].contains(localPayment['state'])) {
-          await store.markRelayed(localPayment['payment_id']);
-        }
-      }
+      await syncPackets(rpc, () => peerIdentity!);
     });
+  }
+
+  /// The production exchange is transport-independent so fault tests execute
+  /// these exact routing/storage rules, rather than a separate mesh simulation.
+  Future<void> syncPackets(
+    Future<Json> Function(Json) rpc,
+    Json Function() peerIdentity,
+  ) async {
+    final remoteIds = <String>{};
+    final remoteRoutes = <String, Json>{};
+    int? offset = 0;
+    bool peerOnline = false;
+    while (offset != null) {
+      final remote = await rpc({'op': 'inventory', 'offset': offset});
+      if (remote['op'] != 'inventory' ||
+          remote['ids'] is! List ||
+          remote['ids'].length > 48 ||
+          remote['ids'].any((id) => id is! String || id.length != 64)) {
+        throw StateError('Invalid inventory');
+      }
+      peerOnline = remote['online'] == true;
+      remoteIds.addAll((remote['ids'] as List).cast<String>());
+      if (remote['routing'] == 2) {
+        final routes = remote['routes'];
+        if (routes is! List || routes.length != remote['ids'].length) {
+          throw StateError('Invalid route inventory');
+        }
+        for (final item in routes) {
+          if (item is! Map ||
+              !remote['ids'].contains(item['id']) ||
+              item['hops'] is! int ||
+              item['hops'] < 0 ||
+              item['hops'] > 4 ||
+              !['payment', 'receipt'].contains(item['kind'])) {
+            throw StateError('Invalid route summary');
+          }
+          remoteRoutes[item['id']] = Map<String, dynamic>.from(item);
+        }
+        if (remoteRoutes.length != remoteIds.length) {
+          throw StateError('Duplicate route summary');
+        }
+      }
+      final next = remote['next'];
+      if (next != null && (next is! int || next <= offset || next > 1000)) {
+        throw StateError('Invalid inventory cursor');
+      }
+      offset = next;
+    }
+    final identity = peerIdentity();
+    final peerId = identity['device_id'] as String;
+    nearby.removeWhere((x) => x['device_id'] == peerId);
+    nearby.add({
+      'device_id': peerId,
+      'name': identity['display_name'] ?? identity['account_id'],
+      'online': peerOnline,
+      'at': nowSeconds,
+    });
+    final local = await store.packets();
+    final localById = {for (final p in local) p['id']: p};
+    // A signed inventory also repairs an ACK lost after the peer committed its
+    // copy. Always retain our original until a verified bank result is known.
+    for (final id in remoteIds.where(localById.containsKey)) {
+      final p = localById[id]!;
+      await store.acknowledge(
+        id,
+        peerId,
+        remoteRoutes[id]?['hops'] ?? p['hops'] + 1,
+        p['expires_at'],
+      );
+      for (final intent in payments.where(
+        (intent) => intent['packet_id'] == id,
+      )) {
+        await store.markRelayed(intent['payment_id']);
+      }
+    }
+    // Fetch receipts first when known; pull a bounded inventory, then push missing packets.
+    final incoming =
+        remoteIds.where((id) {
+          final ours = localById[id];
+          return ours == null ||
+              (remoteRoutes[id] != null &&
+                  remoteRoutes[id]!['hops'] + 1 < ours['hops']);
+        }).toList()..sort((a, b) {
+          int rank(String id) => remoteRoutes[id]?['kind'] == 'receipt' ? 0 : 1;
+          return rank(a).compareTo(rank(b));
+        });
+    for (final item in RelayRouting.fairOrder([
+      for (final id in incoming)
+        {'id': id, 'kind': remoteRoutes[id]?['kind'] ?? 'payment'},
+    ]).take(8)) {
+      final id = item['id'] as String;
+      final value = await rpc({'op': 'get', 'id': id, 'online': bankReachable});
+      if (value['op'] == 'packet') {
+        await accept(Map<String, dynamic>.from(value['packet']));
+        if (remoteRoutes.containsKey(id)) {
+          final ack = await rpc({'op': 'ack', 'id': id});
+          if (ack['op'] != 'acknowledged' || ack['id'] != id) {
+            throw StateError('Peer did not accept durable acknowledgement');
+          }
+        }
+      }
+    }
+    final outgoing = (await store.packets())
+        .where(
+          (p) =>
+              RelayRouting.canForward(p, deviceId, peerId) &&
+              (!remoteIds.contains(p['id']) ||
+                  RelayRouting.improves(
+                    p,
+                    remoteRoutes[p['id']]?['hops'] as int?,
+                  )),
+        )
+        .toList();
+    outgoing.sort((a, b) {
+      final rank = RelayRouting.priority(
+        a,
+        peerId,
+      ).compareTo(RelayRouting.priority(b, peerId));
+      return rank != 0
+          ? rank
+          : (a['expires_at'] as int).compareTo(b['expires_at'] as int);
+    });
+    var sent = 0;
+    for (final p in RelayRouting.fairOrder(outgoing)) {
+      if (sent >= 8) break;
+      final custodians = await store.recentCustodians(p['id']);
+      final isReturnRoute =
+          p['kind'] == 'receipt' && p['path'].contains(peerId);
+      if (!peerOnline &&
+          !isReturnRoute &&
+          !custodians.contains(peerId) &&
+          custodians.length >= RelayRouting.offlineFanout) {
+        continue;
+      }
+      final response = await rpc({'op': 'put', 'packet': forwarded(p)});
+      if (response['op'] != 'stored' || response['id'] != p['id']) {
+        throw StateError('Peer did not acknowledge storage');
+      }
+      await store.acknowledge(p['id'], peerId, p['hops'] + 1, p['expires_at']);
+      sent++;
+      final localPayment = payments
+          .where((x) => x['packet_id'] == p['id'])
+          .firstOrNull;
+      if (localPayment != null &&
+          !['paid', 'rejected'].contains(localPayment['state'])) {
+        await store.markRelayed(localPayment['payment_id']);
+      }
+    }
   }
 
   Future<void> gatewayTick() async {
@@ -1109,11 +1307,28 @@ class BeyondNetEngine extends ChangeNotifier {
     if (working || profile == null || _disposed) return;
     working = true;
     try {
+      await restoreBackgroundRelay();
       if (relay && radio.running) {
-        final peers = radio.discovered.values.toList()
+        final candidates = radio.discovered.values.toList();
+        // Rotate equal-priority peers so a dense network cannot permanently
+        // starve the only neighbour that leads towards an internet gateway.
+        final rotated = candidates.isEmpty
+            ? candidates
+            : [
+                ...candidates.skip(_peerRound % candidates.length),
+                ...candidates.take(_peerRound % candidates.length),
+              ];
+        _peerRound++;
+        final peers = rotated
           ..sort((a, b) {
             int priority(PeerRadio p) =>
-                identityByRadio[p.peripheral.uuid.toString()] == connectedPeer
+                nearby.any(
+                  (n) =>
+                      n['device_id'] ==
+                          identityByRadio[p.peripheral.uuid.toString()] &&
+                      n['online'] == true &&
+                      n['at'] >= nowSeconds - 90,
+                )
                 ? 0
                 : 1;
             return priority(a).compareTo(priority(b));
@@ -1128,13 +1343,19 @@ class BeyondNetEngine extends ChangeNotifier {
           try {
             await syncPeer(peer);
             peerFailures[id] = 0;
-            peerRetry[id] = DateTime.now().add(const Duration(seconds: 8));
+            peerRetry[id] = DateTime.now().add(
+              Duration(milliseconds: 7000 + _jitter.nextInt(3000)),
+            );
           } catch (error) {
             lastError = 'Nearby connection: $error';
             final fails = (peerFailures[id] ?? 0) + 1;
             peerFailures[id] = fails;
             peerRetry[id] = DateTime.now().add(
-              Duration(seconds: (5 * (1 << fails.clamp(0, 4))).clamp(5, 60)),
+              Duration(
+                milliseconds:
+                    (5000 * (1 << fails.clamp(0, 4))).clamp(5000, 60000) +
+                    _jitter.nextInt(3000),
+              ),
             );
           }
         }
@@ -1144,6 +1365,12 @@ class BeyondNetEngine extends ChangeNotifier {
       // Gateway relays recover their cached original submissions through idempotent retry.
       await store.cleanup();
       await reload();
+      if (backgroundActive) {
+        await background?.update(
+          relayBlocked ??
+              '$queueSize encrypted packets · ${bankReachable ? "Bank reachable" : "Offline forwarding"}',
+        );
+      }
       nearby.removeWhere((p) => p['at'] < nowSeconds - 120);
     } catch (e) {
       lastError = e.toString();
@@ -1164,6 +1391,7 @@ class BeyondNetEngine extends ChangeNotifier {
     _disposed = true;
     timer?.cancel();
     connectionTimer?.cancel();
+    background?.dispose();
     closeLive();
     httpClient.close();
     if (_radio != null) unawaited(_radio!.stop());

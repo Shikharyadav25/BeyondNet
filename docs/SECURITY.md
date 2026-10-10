@@ -34,7 +34,7 @@ Phone SQLite contains own payment history and bank receipts plus opaque relay pa
 ## Demo-specific limits
 
 - Legacy rehearsal accounts still have known demo passwords; new signup users choose their own passwords. Free funding is intentionally available to every authenticated account. A publicly exposed endpoint is therefore an intentionally shared demo environment, not private banking. Keep tunnels short-lived and supervised.
-- Foreground relay only. No Android foreground service, iOS restoration/background delivery implementation, or delivery guarantee is included.
+- Android opt-in relay uses a visible foreground service, persistent queue and timed CPU wake lease. Screen closure is supported; force-stop, reboot, permissions and manufacturer power restrictions can interrupt it. iOS background support and delivery guarantees are not included. See [background relay](BACKGROUND_RELAY.md).
 - Peer revocation is immediately enforced by the bank for new submissions. Offline peers may continue trusting an old certificate until its 30-day expiry; a signed offline revocation distribution system is not implemented.
 - Clock synchronization is required. Peer messages tolerate two minutes; new bank payment instructions tolerate at most 60 seconds in the future. Expiry uses signed timestamps at the bank.
 - Wi-Fi mesh, real bank integrations, OTP/SIM identity verification, device recovery, key rotation, refunds, cancellation, chargebacks, signed invoices, private messaging, and high-availability deployment are not implemented.

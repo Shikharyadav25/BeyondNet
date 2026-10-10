@@ -6,6 +6,30 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:beyondnet/engine.dart';
+import 'package:beyondnet/ble_transport.dart';
+import 'package:beyondnet/protocol.dart';
+
+class SimulatedRadio implements PeerTransport {
+  @override
+  final discovered = <String, PeerRadio>{};
+  @override
+  bool running = true;
+  @override
+  Future<void> start() async {
+    running = true;
+  }
+
+  @override
+  Future<void> stop() async {
+    running = false;
+  }
+
+  @override
+  Future<T> connect<T>(
+    PeerRadio peer,
+    Future<T> Function(Future<Json> Function(Json)) run,
+  ) => throw UnimplementedError('Test contacts are explicitly controlled');
+}
 
 // Test-only redirection: production always uses HTTPS/WSS and fingerprint pinning.
 class LoopbackClient extends http.BaseClient {
@@ -65,16 +89,26 @@ void main() {
               (_) async => true,
             );
         Future<void> eventually(bool Function() ready) async {
-          final until = DateTime.now().add(const Duration(seconds: 20));
+          final until = DateTime.now().add(const Duration(seconds: 60));
           while (!ready() && DateTime.now().isBefore(until)) {
             await Future<void>.delayed(const Duration(milliseconds: 100));
           }
-          expect(ready(), isTrue);
+          expect(
+            ready(),
+            isTrue,
+            reason: nodes
+                .map(
+                  (e) =>
+                      '${e.profile?["device_id"]}: ${e.network}; live=${e.liveConnected}; error=${e.lastError}',
+                )
+                .join('\n'),
+          );
         }
 
         Future<BeyondNetEngine> create(String id, String role) async {
           FlutterSecureStorage.setMockInitialValues({});
           final e = BeyondNetEngine(
+            transport: SimulatedRadio(),
             client: LoopbackClient(port),
             authorizePayment: () async => true,
             socketConnector: (url) => WebSocket.connect(
@@ -133,6 +167,78 @@ void main() {
           ),
         );
         expect(sender.account!['balance'], 87555);
+
+        // Actual bank settlement through an OFFLINE intermediate. There is no
+        // simulated direct edge from the sender to either online gateway.
+        Future<void> pause(BeyondNetEngine e) async {
+          e.timer?.cancel();
+          e.connectionTimer?.cancel();
+          await eventually(() => !e.working && !e.checkingConnection);
+          e.closeLive();
+          e.bankReachable = false;
+          e.internet = false;
+          e.relay = true;
+        }
+
+        await pause(sender);
+        await pause(merchant);
+        final intermediate = await create('offline-relay', 'customer');
+        await pause(intermediate);
+        final gateway = await create('mesh-gateway-one', 'customer');
+        await pause(gateway);
+        final secondGateway = await create('mesh-gateway-two', 'customer');
+        await pause(secondGateway);
+        gateway.bankReachable = true;
+        secondGateway.bankReachable = true;
+        sender.connectedPeer = intermediate.deviceId;
+        sender.nearby = [
+          {'device_id': intermediate.deviceId, 'at': nowSeconds},
+        ];
+        final third = await sender.pay(cert, 50, pin: '123456');
+        await eventually(() => !sender.working);
+        Future<void> edge(BeyondNetEngine a, BeyondNetEngine b) async {
+          Json? identity;
+          await a.syncPackets((command) async {
+            final rid = randomCapability();
+            final response = await b.handleRpc(await a.signedRpc(command, rid));
+            final checked = await a.validateRpc(response, expectedRequest: rid);
+            identity = Map<String, dynamic>.from(checked['peer']);
+            return Map<String, dynamic>.from(checked['command']);
+          }, () => identity!);
+        }
+
+        await edge(sender, intermediate);
+        final packet = (await intermediate.store.packets()).firstWhere(
+          (p) =>
+              p['id'] ==
+              sender.payments.firstWhere(
+                (p) => p['payment_id'] == third,
+              )['packet_id'],
+        );
+        expect(await gateway.store.packet(packet['id']), isNull);
+        await edge(intermediate, gateway);
+        await edge(intermediate, secondGateway);
+        final forwarded = (await gateway.store.packet(packet['id']))!;
+        expect(forwarded['hops'], 2);
+        // Competing online gateways send the SAME signed request concurrently.
+        final results = await Future.wait([
+          gateway.submitPacket(forwarded),
+          secondGateway.submitPacket(forwarded),
+        ]);
+        expect(results.first['receipts'], results.last['receipts']);
+        for (final receipt in results.first['receipts']) {
+          await gateway.accept(Map<String, dynamic>.from(receipt));
+        }
+        await edge(intermediate, gateway);
+        await edge(sender, intermediate);
+        await sender.reload();
+        expect(
+          sender.payments.firstWhere((p) => p['payment_id'] == third)['state'],
+          'paid',
+        );
+        expect(sender.account!['balance'], 87505); // only one debit
+        expect(sender.bankReachable, isFalse);
+        expect(intermediate.bankReachable, isFalse);
       } finally {
         for (final e in nodes) {
           e.timer?.cancel();
@@ -156,6 +262,7 @@ void main() {
         await dir.delete(recursive: true);
       }
     },
-    timeout: const Timeout(Duration(minutes: 2)),
+    tags: const ['integration'],
+    timeout: const Timeout(Duration(minutes: 8)),
   );
 }

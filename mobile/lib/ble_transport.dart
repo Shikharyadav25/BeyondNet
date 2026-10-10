@@ -58,9 +58,21 @@ class PeerRadio {
   PeerRadio(this.peripheral, this.rssi) : seen = DateTime.now();
 }
 
-class BleTransport {
+abstract interface class PeerTransport {
+  Map<String, PeerRadio> get discovered;
+  bool get running;
+  Future<void> start();
+  Future<void> stop();
+  Future<T> connect<T>(
+    PeerRadio peer,
+    Future<T> Function(Future<Json> Function(Json)) run,
+  );
+}
+
+class BleTransport implements PeerTransport {
   final CentralManager central = CentralManager();
   final PeripheralManager peripheral = PeripheralManager();
+  @override
   final Map<String, PeerRadio> discovered = {};
   final Map<String, Assembly> incoming = {};
   final Map<String, List<Uint8List>> outgoing = {};
@@ -69,9 +81,11 @@ class BleTransport {
   final List<StreamSubscription> subscriptions = [];
   final Future<Json> Function(Json) handler;
   final void Function(String) onEvent;
+  @override
   bool running = false;
   Timer? cleanup;
   BleTransport(this.handler, this.onEvent);
+  @override
   Future<void> start() async {
     if (running) return;
     // Managers resolve initial poweredOn asynchronously after construction.
@@ -115,8 +129,9 @@ class BleTransport {
               final request = Map<String, dynamic>.from(
                 jsonDecode(utf8.decode(value)),
               );
-              final result = await handler(request)
-                  .timeout(const Duration(seconds: 20));
+              final result = await handler(
+                request,
+              ).timeout(const Duration(seconds: 20));
               outgoing[id] = frames(canonical(result));
             } catch (_) {
               outgoing[id] = frames(
@@ -190,13 +205,14 @@ class BleTransport {
           (_, p) => DateTime.now().difference(p.seen).inSeconds > 90,
         );
       });
-      onEvent('Nearby relay started. Keep this app open.');
+      onEvent('Nearby Bluetooth relay started.');
     } catch (_) {
       await stop();
       rethrow;
     }
   }
 
+  @override
   Future<T> connect<T>(
     PeerRadio peer,
     Future<T> Function(Future<Json> Function(Json)) run,
@@ -252,6 +268,7 @@ class BleTransport {
     }
   }
 
+  @override
   Future<void> stop() async {
     running = false;
     cleanup?.cancel();

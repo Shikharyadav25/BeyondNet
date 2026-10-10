@@ -2,7 +2,9 @@
 
 BeyondNet is an Android demo payment app that works online and can also send encrypted requests through nearby phones when the sender has no internet. A laptop runs the Java demo bank and operator [...]
 
-**Version 1.2.1 (Android build 6). Uses free demo INR; no real UPI or bank integration.**
+**Version 1.3.0 (Android build 7). Uses free demo INR; no real UPI or bank integration.**
+
+Enabled Android relay now continues in a foreground service with the screen closed/locked. Offline chains have durable custody acknowledgements, loop avoidance, shorter-route recovery and alternate receipt routes. See [background relay and physical acceptance](docs/BACKGROUND_RELAY.md).
 
 ## Vision
 
@@ -16,7 +18,7 @@ Make payment initiation possible in places with poor connectivity. Participating
 
 Create an account with a name, password, and unique `yourname@beyondnet` ID. New accounts start at zero; tap **Add demo money** while online (₹1–₹10,000 per top-up). Interrupted top-ups retr[...]
 
-On opening/resuming the app and periodically while open, Android checks internet connectivity and the app checks the bank. Online users pay directly. Offline users see a setup prompt: turn Bluetoo[...]
+Android checks internet connectivity and the app checks bank reachability. Online users pay directly. Offline users enable Bluetooth, grant Nearby devices permission (Android 12+) or foreground Location permission with Location on (Android 10–11), enable relay, scan for verified phones and tap **Connect** before paying. Relay phones may then close the screen; a visible foreground service retains the radio and queue. A bank outage is shown separately from internet being off.
 
 ## Architecture and flow
 
@@ -68,8 +70,8 @@ Two phones are enough: offline personal user and online merchant with relay enab
    ngrok http http://127.0.0.1:8080 --inspect=false
    ```
 
-4. Keep both processes running and the laptop awake and online. Use the HTTPS URL and the fingerprint from the console's **Device setup** page on every phone. See [Ngrok setup](docs/NGROK.md) fo[...]
-5. Install the separately provided **BeyondNet-Android-1.2.1.apk**. Create one Personal and one Merchant account while online. Set a six-digit demo payment PIN online and fund the personal account[...]
+4. Keep both processes running and the laptop awake and online. Use the HTTPS URL and the fingerprint from the console's **Device setup** page on every phone. See [Ngrok setup](docs/NGROK.md) for this laptop's address and how to update existing phones.
+5. Install **BeyondNet-Android-1.3.0.apk**. Create one Personal and one Merchant account while online. Set a six-digit demo payment PIN online and fund the personal account, then try an online payment before the offline two-phone flow above.
 
 Use the updated bank source with this APK. Existing bank data and app installations are preserved; legacy accounts remain usable through **Sign in**, and previous relay account records become pers[...]
 
@@ -79,7 +81,7 @@ For source builds, install Flutter, the Android SDK and JDK described in [Develo
 
 Implemented: signup, two account types, idempotent funding, connectivity-aware screens, optional relay, explicit nearby connection, ID/QR payments, live receipt delivery, HTTPS recovery, encrypted[...]
 
-Next: physical two-phone/multi-hop Android acceptance and measured radio reliability. Planned extensions include background delivery, Wi-Fi mesh, stronger production operations and authorized fina[...]
+Next: physical two-phone/multi-hop background acceptance and measured radio reliability/power. Background relay is implemented in 1.3.0; physical acceptance remains necessary. Wi-Fi mesh, stronger production operations, authorized financial integration and iPhone support are future work.
 
 ## Know before testing
 

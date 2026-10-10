@@ -11,7 +11,14 @@ class LocalStore {
         '${(await getApplicationSupportDirectory()).path}/offline-karo.sqlite3';
     db = await openDatabase(
       path,
-      version: 1,
+      version: 2,
+      onConfigure: (db) async {
+        await db.execute('PRAGMA busy_timeout=5000');
+        await db.execute('PRAGMA synchronous=FULL');
+      },
+      onUpgrade: (db, old, _) async {
+        if (old < 2) await _createRelayTables(db);
+      },
       onCreate: (db, _) async {
         await db.execute(
           'CREATE TABLE packets(id TEXT PRIMARY KEY, data TEXT NOT NULL, expiry INTEGER NOT NULL, uploaded INTEGER NOT NULL DEFAULT 0)',
@@ -31,18 +38,55 @@ class LocalStore {
         await db.execute(
           'CREATE TABLE peers(id TEXT PRIMARY KEY, data TEXT NOT NULL)',
         );
+        await _createRelayTables(db);
       },
     );
   }
 
+  static Future<void> _createRelayTables(DatabaseExecutor db) => db.execute(
+    'CREATE TABLE IF NOT EXISTS relay_acks(packet TEXT NOT NULL, peer TEXT NOT NULL, hops INTEGER NOT NULL, expiry INTEGER NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(packet,peer))',
+  );
+
+  Future<void> acknowledge(String packet, String peer, int hops, int expiry) =>
+      db.insert('relay_acks', {
+        'packet': packet,
+        'peer': peer,
+        'hops': hops,
+        'expiry': expiry,
+        'at': nowSeconds,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+
+  Future<Set<String>> recentCustodians(String packet) async => (await db.query(
+    'relay_acks',
+    columns: ['peer'],
+    where: 'packet=? AND expiry>? AND at>?',
+    whereArgs: [packet, nowSeconds, nowSeconds - 90],
+  )).map((row) => row['peer'] as String).toSet();
+
   Future<bool> putPacket(Json p, {bool owned = false}) async {
     await checkPacket(p);
     return db.transaction((tx) async {
-      if ((await tx.query(
+      final existing = await tx.query(
         'packets',
         where: 'id=?',
         whereArgs: [p['id']],
-      )).isNotEmpty) {
+      );
+      final clean = Map<String, dynamic>.from(p)..remove('uploaded');
+      if (existing.isNotEmpty) {
+        final old = Map<String, dynamic>.from(
+          jsonDecode(existing.single['data'] as String),
+        );
+        // Preserve financial content and upload state; only a strictly shorter
+        // authenticated handoff replaces the local copy's routing metadata.
+        if (p['hops'] < old['hops']) {
+          await tx.update(
+            'packets',
+            {'data': jsonEncode(clean)},
+            where: 'id=?',
+            whereArgs: [p['id']],
+          );
+          return true;
+        }
         return false;
       }
       final used = Sqflite.firstIntValue(
@@ -58,7 +102,7 @@ class LocalStore {
       }
       await tx.insert('packets', {
         'id': p['id'],
-        'data': jsonEncode(p),
+        'data': jsonEncode(clean),
         'expiry': p['expires_at'],
         'uploaded': 0,
       });
@@ -180,6 +224,7 @@ class LocalStore {
     'data': jsonEncode(cert),
   }, conflictAlgorithm: ConflictAlgorithm.replace);
   Future<void> cleanup() async {
+    await db.delete('relay_acks', where: 'expiry<=?', whereArgs: [nowSeconds]);
     // Preserve expired owned payment intents and receipts. Their financial outcome remains unknown until verified.
     await db.delete(
       'packets',

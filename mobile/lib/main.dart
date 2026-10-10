@@ -32,11 +32,21 @@ String short(String value) =>
     value.length > 10 ? '${value.substring(0, 8)}…' : value;
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const BeyondNetApp());
+  // A service-created engine has no FlutterView. Start restoration eagerly,
+  // independently of whether Flutter renders a screen.
+  final engine = BeyondNetEngine();
+  final initialized = engine.init();
+  runApp(BeyondNetApp(engine: engine, initialized: initialized));
 }
 
 class BeyondNetApp extends StatefulWidget {
-  const BeyondNetApp({super.key});
+  final BeyondNetEngine engine;
+  final Future<void> initialized;
+  const BeyondNetApp({
+    super.key,
+    required this.engine,
+    required this.initialized,
+  });
   @override
   State<BeyondNetApp> createState() => _BeyondNetAppState();
 }
@@ -59,12 +69,12 @@ class _BeyondNetAppState extends State<BeyondNetApp>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    engine.dispose();
+    // Native service owns the engine across Activity changes.
     super.dispose();
   }
 
-  final engine = BeyondNetEngine();
-  late final Future<void> initialized = engine.init();
+  BeyondNetEngine get engine => widget.engine;
+  Future<void> get initialized => widget.initialized;
   @override
   Widget build(BuildContext context) => MaterialApp(
     title: 'BeyondNet',
@@ -836,7 +846,7 @@ class _ShellState extends State<Shell> {
               subtitle: const Text(
                 'Available to personal and merchant accounts',
               ),
-              value: e.relay,
+              value: e.relayEnabled || e.relay,
               onChanged: starting
                   ? null
                   : (v) async {
@@ -848,7 +858,7 @@ class _ShellState extends State<Shell> {
                     },
             ),
             const Hint(
-              'Needs Bluetooth on and BeyondNet open. Allow Nearby devices on Android 12+, or Location permission and Location on for Android 10–11. Internet is optional: when available, your phone forwards requests to the bank automatically.',
+              'Enable relay once, then the app screen can be closed. Bluetooth must stay on. Allow Nearby devices on Android 12+, or Location permission and Location on for Android 10–11. The background relay shows a notification and uses battery. Internet is optional; an online relay forwards requests to the bank automatically.',
             ),
             TextButton(
               onPressed: () => setState(() => tab = 2),
@@ -1187,10 +1197,10 @@ class _ShellState extends State<Shell> {
                 style: TextStyle(fontWeight: FontWeight.w600),
               ),
               subtitle: const Text(
-                'Bluetooth LE · keep app open',
+                'Bluetooth LE · continues with the screen closed',
                 style: TextStyle(fontSize: 12, color: muted),
               ),
-              value: e.relay,
+              value: e.relayEnabled || e.relay,
               onChanged: starting
                   ? null
                   : (v) async {
@@ -1207,13 +1217,19 @@ class _ShellState extends State<Shell> {
               leading: Icon(Icons.checklist, color: teal),
               title: Text('Before you connect'),
               subtitle: Text(
-                '1. Turn Bluetooth on.\n2. Android 12+: allow Nearby devices. Android 10–11: allow Location while using the app and turn Location on.\n3. Keep BeyondNet open on both phones.\n4. Set a screen lock to authorize payments.\nCamera permission is needed only for QR scanning.',
+                '1. Turn Bluetooth on.\n2. Android 12+: allow Nearby devices. Android 10–11: allow Location while using the app and turn Location on.\n3. Enable Nearby relay on each participating phone. It continues through a visible background service, including with a locked screen.\n4. Set a screen lock to authorize payments.\nCamera permission is needed only for QR scanning. Relaying uses battery; force-stopping the app stops forwarding.',
               ),
             ),
             TextButton(
               onPressed: () => openAppSettings(),
               child: const Text('Open device permissions'),
             ),
+            if (e.background != null)
+              TextButton(
+                onPressed: () => e.background!.batterySettings(),
+                child: const Text('Background battery settings'),
+              ),
+            if (e.relayBlocked != null) Hint('Relay paused: ${e.relayBlocked}'),
             Text(
               e.network,
               style: const TextStyle(fontWeight: FontWeight.w600),
@@ -1285,7 +1301,7 @@ class _ShellState extends State<Shell> {
       if (e.nearby.isEmpty)
         const Box(
           child: Hint(
-            'No verified peers yet. Start Nearby relay on another enrolled phone, keep both apps open and move within Bluetooth range.',
+            'No verified peers yet. Enable Nearby relay on another enrolled phone and move within Bluetooth range. The app screen can be closed after enabling relay.',
           ),
         ),
       ...e.nearby.map(
@@ -1492,7 +1508,7 @@ class _ShellState extends State<Shell> {
       ),
       const SizedBox(height: 20),
       const Hint(
-        'BeyondNet is a demo bank system. Payments settle only when a gateway reaches the bank. A relay acknowledgment is not proof of payment. Bluetooth relay runs while the app is open.',
+        'BeyondNet is a demo bank system. Payments settle only when a gateway reaches the bank. A relay acknowledgment is not proof of payment. Enabled Bluetooth relay continues in a visible background service; force-stop and device battery restrictions can interrupt it.',
       ),
       const SizedBox(height: 20),
       const Center(child: Eyebrow('BEYONDNET · VERSION 1.2.1')),
