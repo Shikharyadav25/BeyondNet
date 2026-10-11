@@ -64,13 +64,13 @@ sequenceDiagram
     R->>G: Forward encrypted packet
     G->>B: Submit over WSS or HTTPS
     B->>B: Verify sender, signature, PIN, expiry and instruction identity
-    B->>D: Check duplicate and funds; atomically commit outcome
+    B->>D: Check duplicate and funds, then atomically commit outcome
     D-->>B: Saved decision, ledger and receipts
     B-->>G: Signed, encrypted bank receipt
     G-->>R: Relay receipt
     R-->>P: Return receipt over BLE
     P->>P: Verify receipt and update status
-    Note over P,B: Online senders submit directly; retries recover the original bank decision
+    Note over P,B: Online senders submit directly. Retries recover the original bank decision.
 ```
 
 The authorization window is **10 minutes**, not a processing delay. Reachable requests are submitted immediately. A transport acknowledgment means a device stored the packet; only a verified bank receipt establishes the outcome. If the deadline passes without a receipt, the original request remains available for reconciliation. An already committed payment is not cancelled by a late receipt.
