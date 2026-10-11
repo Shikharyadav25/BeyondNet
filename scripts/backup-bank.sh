@@ -7,7 +7,7 @@ BANK_DATA="${KARO_DATA_DIR:-$PWD/data}"
 mkdir -p "$BANK_DATA/backups"
 BANK_BACKUP="$BANK_DATA/backups/$(date +%Y%m%d-%H%M%S)-$(openssl rand -hex 3)"
 mkdir "$BANK_BACKUP"
-for file in bank-keys.json admin-token.txt public-url.txt; do
+for file in bank-keys.json pin-pepper.txt admin-token.txt rotated-demo-passwords.json public-url.txt; do
   if [ -f "$BANK_DATA/$file" ]; then cp "$BANK_DATA/$file" "$BANK_BACKUP/$file"; fi
 done
 if [ -f "${BEYONDNET_DB_CONFIG:-$PWD/data/postgres.properties}" ]; then

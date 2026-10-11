@@ -16,7 +16,7 @@ from scripts.test_postgres import environment, drop_schema
 from tests.support.wire_oracle import public, sign, seal, open_box, verify, packet, canonical
 
 ROOT = Path(__file__).resolve().parents[1]
-JAR = ROOT / 'backend/target/bank-1.2.0.jar'
+JAR = ROOT / 'backend/target/bank-1.3.3.jar'
 
 
 @pytest.fixture
@@ -98,6 +98,11 @@ def test_java_http_and_websocket_payment_recovery(java_bank):
     assert c.get('/static/app.js').status_code == 200
     assert c.get('/static/style.css').status_code == 200
     assert c.get('/api/admin/state').status_code == 401
+    forwarded = {'X-Forwarded-For': '203.0.113.10'}
+    assert c.get('/', headers=forwarded).status_code == 403
+    assert c.get('/api/admin/state', headers=forwarded).status_code == 403
+    assert c.get('/api/health', headers=forwarded).status_code == 200
+    assert c.get('/api/receipts/example?after=bad').status_code == 400
     sender, merchant = Device(c, 'sam@beyondnet'), Device(c, 'shop@beyondnet', 'merchant')
     sender.pin(); sender.fund()
     p, body = sender.payment()
@@ -119,6 +124,14 @@ def test_java_http_and_websocket_payment_recovery(java_bank):
     assert again.json()['receipts'] == result['receipts']
     inbox = c.get('/api/receipts/' + sender.id, headers=sender.headers).json()
     assert sender.receipt(inbox['receipts'][0])['payment_id'] == body['payment_id']
+    with connect(f'ws://127.0.0.1:{port}/api/live') as resumed:
+        resumed.send(json.dumps({'token': sender.token, 'device_id': sender.id, 'after': inbox['cursor']}))
+        assert json.loads(resumed.recv(timeout=5))['type'] == 'ready'
+        assert json.loads(resumed.recv(timeout=5))['type'] == 'account'
+        # A new submission returns a result without replaying the old receipt first.
+        resumed.send(json.dumps({'type': 'submit', 'id': 'recover-again', 'packet': p}))
+        message = json.loads(resumed.recv(timeout=10))
+        assert message['type'] == 'result' and message['duplicate']
     assert c.get('/api/receipts/' + merchant.id, headers=sender.headers).status_code == 403
     assert c.get('/api/me', headers=sender.headers).json()['account']['balance'] == 99000
     admin = {'Authorization': 'Bearer ' + (data / 'admin-token.txt').read_text().strip()}

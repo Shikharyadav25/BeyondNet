@@ -25,3 +25,7 @@ CREATE TABLE IF NOT EXISTS events (id BIGSERIAL PRIMARY KEY, at BIGINT NOT NULL,
 CREATE TABLE IF NOT EXISTS payment_pins(account TEXT PRIMARY KEY REFERENCES accounts(id),salt BYTEA NOT NULL,hash TEXT NOT NULL,failed BIGINT NOT NULL DEFAULT 0,locked_until BIGINT NOT NULL DEFAULT 0);
 
 CREATE TABLE IF NOT EXISTS migration_meta(id TEXT PRIMARY KEY, imported_at BIGINT NOT NULL, summary TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS ledger_account_revision ON ledger(account,id);
+CREATE INDEX IF NOT EXISTS receipt_expiry ON device_receipts(expiry);
+CREATE INDEX IF NOT EXISTS session_expiry ON sessions(expiry);
+CREATE INDEX IF NOT EXISTS event_retention ON events(at);

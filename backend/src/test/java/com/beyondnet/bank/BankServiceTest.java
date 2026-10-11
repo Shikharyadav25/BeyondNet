@@ -378,8 +378,11 @@ class BankServiceTest {
   @Test
   void revocationBlocksNewInstruction() {
     bank.revoke(did);
-    assertEquals(
-        400, assertThrows(BankException.class, () -> bank.ingest(wrap(body(1000)))).status);
+    Map<String, Object> packet = wrap(body(1000));
+    Map<String, Object> rejected = receipt(bank.ingest(packet));
+    assertEquals("rejected", rejected.get("status"));
+    assertEquals("Sender device was revoked", rejected.get("reason"));
+    assertEquals(true, bank.ingest(packet).get("duplicate"));
     assertEquals(100000, balance(payer));
   }
 
@@ -388,6 +391,7 @@ class BankServiceTest {
     Path other = directory.resolve("other-instance");
     Files.createDirectories(other);
     Files.copy(directory.resolve("bank-keys.json"), other.resolve("bank-keys.json"));
+    Files.copy(directory.resolve("pin-pepper.txt"), other.resolve("pin-pepper.txt"));
     try (BankDatabase second = new BankDatabase(other, db.namespace())) {
       BankService service = new BankService(second);
       Map<String, Object> p = wrap(body(1000));
@@ -404,6 +408,82 @@ class BankServiceTest {
         pool.shutdownNow();
       }
     }
+  }
+
+  @Test void missingRecipientGetsRecoverableSignedRejection() {
+    var b = body(1000);
+    b.put("recipient", "missing@beyondnet");
+    var packet = wrap(b);
+    assertEquals("rejected", receipt(bank.ingest(packet)).get("status"));
+    assertEquals(true, bank.ingest(packet).get("duplicate"));
+    assertEquals(100000, balance(payer));
+    assertEquals(0L, (long) db.read(c -> scalar(c, "SELECT COUNT(*) FROM ledger WHERE payment LIKE 'OK-%'")));
+  }
+
+  @Test void tokensAreHashedAndLogoutRevokesThem() {
+    var login = bank.login(map("account", payer, "password", password));
+    String token = (String) login.get("token");
+    assertEquals(0L, (long) db.read(c -> scalar(c, "SELECT COUNT(*) FROM sessions WHERE token=?", token)));
+    assertEquals(payer, bank.account("Bearer " + token));
+    bank.logout("Bearer " + token);
+    assertEquals(401, assertThrows(BankException.class, () -> bank.account("Bearer " + token)).status);
+  }
+
+  @Test void legacyPinIsUpgradedWithoutChangingPaymentProtocol() {
+    byte[] salt = random(16);
+    db.read(c -> update(c, "UPDATE payment_pins SET salt=?,hash=? WHERE account=?",
+        salt, passwordHash("123456", salt), payer));
+    assertEquals("paid", receipt(bank.ingest(wrap(body(1000)))).get("status"));
+    assertTrue(db.read(c -> (String) one(c, "SELECT hash FROM payment_pins WHERE account=?", payer).get("hash"))
+        .startsWith("v2:"));
+  }
+
+  @Test void publishedPasswordsRotateWithoutDeletingBalancesOrDevices() throws Exception {
+    String legacy = "alice@beyondnet";
+    bank.signup(map("account", legacy, "name", "Legacy", "role", "customer", "password", "alice-demo-pass"));
+    bank.topup(legacy, map("amount", 2500, "request_id", UUID.randomUUID().toString()));
+    new BankService(db);
+    assertEquals(401, assertThrows(BankException.class,
+        () -> bank.login(map("account", legacy, "password", "alice-demo-pass"))).status);
+    String replacement = (String) parse(Files.readString(directory.resolve("rotated-demo-passwords.json"))).get(legacy);
+    assertNotNull(bank.login(map("account", legacy, "password", replacement)));
+    assertEquals(2500, balance(legacy));
+    assertNotNull(bank.recipient(merchant));
+  }
+
+  @Test void legacyPinUpgradeDoesNotRejectConcurrentValidPayments() throws Exception {
+    byte[] salt = random(16);
+    db.read(c -> update(c, "UPDATE payment_pins SET salt=?,hash=? WHERE account=?",
+        salt, passwordHash("123456", salt), payer));
+    var first = wrap(body(1000));
+    var second = wrap(body(1000));
+    var workers = Executors.newFixedThreadPool(2);
+    try {
+      for (var result : workers.invokeAll(List.of(
+          (Callable<Map<String, Object>>) () -> bank.ingest(first),
+          () -> bank.ingest(second))))
+        assertEquals("paid", receipt(result.get()).get("status"));
+      assertEquals(98000, balance(payer));
+    } finally { workers.shutdownNow(); }
+  }
+
+  @Test void idempotencyCommitmentDoesNotExposeAFastPinDigest() {
+    var b = body(1000);
+    var p = wrap(b);
+    var first = bank.ingest(p);
+    String committed = db.read(c -> (String) one(c,
+        "SELECT hash FROM payments WHERE sender=? AND id=?", payer, b.get("payment_id")).get("hash"));
+    assertTrue(committed.startsWith("hmac:"));
+    assertNotEquals(digest(b), committed);
+    // Existing instructions from older banks remain recoverable without a debit.
+    db.read(c -> update(c, "UPDATE payments SET hash=? WHERE sender=? AND id=?",
+        digest(b), payer, b.get("payment_id")));
+    var recovered = bank.ingest(p);
+    assertEquals(true, recovered.get("duplicate"));
+    assertEquals(json(first.get("receipts")), json(recovered.get("receipts")));
+    assertEquals(99000, balance(payer));
+    assertTrue(db.read(c -> (String) one(c, "SELECT hash FROM payments WHERE sender=? AND id=?",
+        payer, b.get("payment_id")).get("hash")).startsWith("hmac:"));
   }
 
   @Test

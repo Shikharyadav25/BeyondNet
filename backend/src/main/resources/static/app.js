@@ -236,7 +236,7 @@ if (token) {
 } else {
   $('login').showModal();
 }
-setInterval(refresh, 2500);
+setInterval(() => { if (!document.hidden) refresh(); }, 15000);
 
 let bankQrObjectUrl = null;
 

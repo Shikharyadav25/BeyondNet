@@ -2,7 +2,9 @@
 
 BeyondNet is an Android demo payment app that works online and can also send encrypted requests through nearby phones when the sender has no internet. A laptop runs the Java demo bank and operator [...]
 
-**Version 1.3.2 (Android build 9). Uses free demo INR; no real UPI or bank integration.**
+**Version 1.3.3 (Android build 10). Uses free demo INR; no real UPI or bank integration.**
+
+This release also hardens the Java bank and reduces idle traffic and online queue delay. See [review changes and remaining work](docs/REVIEW_IMPROVEMENTS.md). Restart the bank once and install the APK over the existing app. Published legacy demo passwords are rotated on startup; replacements are kept privately in `data/rotated-demo-passwords.json`. Preserve `data/pin-pepper.txt` with your bank identity and backups.
 
 Enabled Android relay now continues in a foreground service with the screen closed/locked. Offline chains have durable custody acknowledgements, loop avoidance, shorter-route recovery and alternate receipt routes. See [background relay and physical acceptance](docs/BACKGROUND_RELAY.md).
 
@@ -57,7 +59,7 @@ Two phones are enough: offline personal user and online merchant with relay enab
 1. Extract the source ZIP. This Mac already has Java/Maven/PostgreSQL. On macOS open `Start-Bank.command` or use:
 
    ```sh
-   cd /Users/shikharyadav/Desktop/Projects/BeyondNet
+   cd /path/to/BeyondNet
    ./start-bank.sh
    ```
 
@@ -71,7 +73,7 @@ Two phones are enough: offline personal user and online merchant with relay enab
    ```
 
 4. Keep both processes running and the laptop awake and online. Use the HTTPS URL and the fingerprint from the console's **Device setup** page on every phone. See [Ngrok setup](docs/NGROK.md) for this laptop's address and how to update existing phones.
-5. Install **BeyondNet-Android-1.3.2.apk**. Create one Personal and one Merchant account while online. Set a six-digit demo payment PIN online and fund the personal account, then try an online payment before the offline two-phone flow above.
+5. Install **BeyondNet-Android-1.3.3.apk**. Create one Personal and one Merchant account while online. Set a six-digit demo payment PIN online and fund the personal account, then try an online payment before the offline two-phone flow above.
 
 Use the updated bank source with this APK. Existing bank data and app installations are preserved; legacy accounts remain usable through **Sign in**, and previous relay account records become pers[...]
 
@@ -81,7 +83,7 @@ For source builds, install Flutter, the Android SDK and JDK described in [Develo
 
 Implemented: signup, two account types, idempotent funding, connectivity-aware screens, optional relay, explicit nearby connection, ID/QR payments, live receipt delivery, HTTPS recovery, encrypted[...]
 
-Next: physical two-phone/multi-hop background acceptance and measured radio reliability/power. Background relay is implemented in 1.3.2; physical acceptance remains necessary. Wi-Fi mesh, stronger production operations, authorized financial integration and iPhone support are future work.
+Next: physical two-phone/multi-hop background acceptance and measured radio reliability/power. Background relay is implemented in 1.3.3; physical acceptance remains necessary. Wi-Fi mesh, stronger production operations, authorized financial integration and iPhone support are future work.
 
 ## Know before testing
 

@@ -21,7 +21,19 @@ import org.bouncycastle.crypto.signers.Ed25519Signer;
 public final class WireCrypto {
   public static final ObjectMapper JSON =
       new ObjectMapper(
-              com.fasterxml.jackson.core.JsonFactory.builder()
+              new com.fasterxml.jackson.core.JsonFactoryBuilder()
+                  .characterEscapes(new com.fasterxml.jackson.core.io.CharacterEscapes() {
+                    private final int[] escapes = standardAsciiEscapesForJSON();
+                    { for (int i = 0; i < 32; i++)
+                        if (i != 8 && i != 9 && i != 10 && i != 12 && i != 13)
+                          escapes[i] = ESCAPE_CUSTOM;
+                    }
+                    @Override public int[] getEscapeCodesForAscii() { return escapes; }
+                    @Override public com.fasterxml.jackson.core.SerializableString getEscapeSequence(int ch) {
+                      if (ch >= 32) return null;
+                      return new com.fasterxml.jackson.core.io.SerializedString(String.format("\\u%04x", ch));
+                    }
+                  })
                   .streamReadConstraints(
                       com.fasterxml.jackson.core.StreamReadConstraints.builder()
                           .maxNestingDepth(64)

@@ -8,7 +8,7 @@ import uuid
 ROOT=Path(__file__).resolve().parents[1]
 
 def environment():
-    return {**os.environ, 'BEYONDNET_DB_CONFIG':str(ROOT/'data/postgres.properties'), 'BEYONDNET_DB_SCHEMA':'test_'+uuid.uuid4().hex}
+    return {**os.environ, 'BEYONDNET_DB_CONFIG':os.environ.get('BEYONDNET_DB_CONFIG', str(ROOT/'data/postgres.properties')), 'BEYONDNET_DB_SCHEMA':'test_'+uuid.uuid4().hex}
 
 def drop_schema(env):
     schema=env['BEYONDNET_DB_SCHEMA']

@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.socket.*;
 import org.springframework.web.socket.config.annotation.*;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
+import org.springframework.web.socket.handler.ConcurrentWebSocketSessionDecorator;
 
 @Component
 public class LiveSocket extends TextWebSocketHandler {
@@ -22,13 +23,19 @@ public class LiveSocket extends TextWebSocketHandler {
             t.setDaemon(true);
             return t;
           });
+  private final ExecutorService workers = Executors.newVirtualThreadPerTaskExecutor();
+  private final Runnable committed = () -> clients.values().forEach(this::queuePoll);
 
   static class State {
     final WebSocketSession socket;
     final long created = now();
-    String token, account, device;
+    String token, device;
+    volatile String account;
     long cursor = 0, revision = -1, window = now();
+    volatile long lastPoll = 0;
     int count = 0;
+    final java.util.concurrent.atomic.AtomicBoolean queued = new java.util.concurrent.atomic.AtomicBoolean();
+    volatile boolean dirty;
 
     State(WebSocketSession s) {
       socket = s;
@@ -37,18 +44,14 @@ public class LiveSocket extends TextWebSocketHandler {
 
   public LiveSocket(BankService bank) {
     this.bank = bank;
+    bank.db.commitListeners.add(committed);
     timer.scheduleAtFixedRate(
         () -> {
-          for (State s : clients.values())
-            synchronized (s) {
-              try {
-                if (s.account == null) {
-                  if (now() - s.created >= 10) close(s, 1008);
-                } else poll(s);
-              } catch (Exception e) {
-                close(s, 1008);
-              }
-            }
+          for (State s : clients.values()) {
+            if (s.account == null) {
+              if (now() - s.created >= 10) close(s, 1008);
+            } else if (now() - s.lastPoll >= 30) queuePoll(s);
+          }
         },
         1,
         1,
@@ -58,7 +61,33 @@ public class LiveSocket extends TextWebSocketHandler {
   @Override
   public void afterConnectionEstablished(WebSocketSession session) {
     session.setTextMessageSizeLimit(16384);
-    clients.put(session.getId(), new State(session));
+    synchronized (clients) {
+      if (clients.size() >= 128) {
+        try { session.close(new CloseStatus(1013)); } catch (Exception ignored) { }
+        return;
+      }
+      clients.put(session.getId(), new State(new ConcurrentWebSocketSessionDecorator(session, 10000, 131072)));
+    }
+  }
+
+  private void queuePoll(State s) {
+    s.dirty = true;
+    if (!s.queued.compareAndSet(false, true)) return;
+    workers.execute(() -> {
+      try {
+        for (int i = 0; i < 4 && s.dirty && clients.containsKey(s.socket.getId()); i++) {
+          s.dirty = false;
+          synchronized (s) {
+            if (s.account != null) poll(s);
+          }
+        }
+      } catch (Exception e) {
+        close(s, 1008);
+      } finally {
+        s.queued.set(false);
+        if (s.dirty && clients.containsKey(s.socket.getId())) queuePoll(s);
+      }
+    });
   }
 
   @Override
@@ -75,6 +104,7 @@ public class LiveSocket extends TextWebSocketHandler {
         if (s.account == null) {
           s.token = BankService.text(m, "token", 1, 256);
           s.device = BankService.text(m, "device_id", 1, 80);
+          if (m.containsKey("after")) s.cursor = Math.max(0, integer(m.get("after")));
           s.account = bank.account("Bearer " + s.token);
           bank.db.read(
               c -> {
@@ -82,7 +112,7 @@ public class LiveSocket extends TextWebSocketHandler {
                 return null;
               });
           send(s, map("type", "ready", "fingerprint", bank.trust.get("fingerprint")));
-          poll(s);
+          queuePoll(s);
           return;
         }
         bank.account("Bearer " + s.token);
@@ -113,7 +143,7 @@ public class LiveSocket extends TextWebSocketHandler {
         } catch (BankException e) {
           send(s, map("type", "error", "id", id, "status", e.status, "message", e.getMessage()));
         }
-        poll(s);
+        queuePoll(s);
       } catch (Exception e) {
         close(s, 1008);
       }
@@ -121,6 +151,7 @@ public class LiveSocket extends TextWebSocketHandler {
   }
 
   private void poll(State s) throws Exception {
+    s.lastPoll = now();
     bank.account("Bearer " + s.token);
     Map<String, Object> a =
         bank.db.read(
@@ -139,6 +170,7 @@ public class LiveSocket extends TextWebSocketHandler {
       event.putAll(batch);
       send(s, event);
       s.cursor = integer(batch.get("cursor"));
+      if (((List<?>) batch.get("receipts")).size() == 50) s.dirty = true;
     }
   }
 
@@ -161,7 +193,9 @@ public class LiveSocket extends TextWebSocketHandler {
 
   @PreDestroy
   public void stop() {
+    bank.db.commitListeners.remove(committed);
     timer.shutdownNow();
+    workers.shutdownNow();
     for (State s : clients.values()) close(s, 1001);
   }
 

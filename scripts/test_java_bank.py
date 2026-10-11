@@ -16,7 +16,7 @@ signal.signal(signal.SIGTERM, stop)
 signal.signal(signal.SIGINT, stop)
 
 root = Path(__file__).resolve().parents[1]
-jar = root / 'backend/target/bank-1.2.0.jar'
+jar = root / 'backend/target/bank-1.3.3.jar'
 if not jar.is_file():
     raise SystemExit('Build backend with mvn package before the live Flutter test.')
 with tempfile.TemporaryDirectory(prefix='beyondnet-java-test-') as directory:

@@ -21,7 +21,7 @@ The JDBC connection uses `sslmode=verify-full` with the default Java trust store
 Terminal 1:
 
 ```sh
-cd /Users/shikharyadav/Desktop/Projects/BeyondNet
+cd /path/to/BeyondNet
 ./start-bank.sh
 ```
 
@@ -30,7 +30,7 @@ The launcher detects a remote PostgreSQL URL and **does not initialize or start 
 Terminal 2, if ngrok is not already running:
 
 ```sh
-cd /Users/shikharyadav/Desktop/Projects/BeyondNet
+cd /path/to/BeyondNet
 ./Start-Ngrok.command
 ```
 
@@ -39,7 +39,7 @@ Dashboard: `http://localhost:8080`. Phones continue using the same public HTTPS 
 Read the existing operator key:
 
 ```sh
-cat /Users/shikharyadav/Desktop/Projects/BeyondNet/data/admin-token.txt
+cat /path/to/BeyondNet/data/admin-token.txt
 ```
 
 ## What still runs locally

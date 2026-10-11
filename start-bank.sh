@@ -10,7 +10,7 @@ fi
 command -v java >/dev/null || { echo 'Install Java 21 or newer.' >&2; exit 1; }
 . ./scripts/database-config.sh
 if bank_database_is_local; then ./scripts/start-postgres.sh; fi
-JAR=backend/target/bank-1.2.0.jar
+JAR=backend/target/bank-1.3.3.jar
 if [ ! -f "$JAR" ] || [ "$(find backend/src backend/pom.xml -type f -newer "$JAR" -print -quit)" ]; then
   command -v mvn >/dev/null || { echo 'Install Maven 3.6.3 or newer.' >&2; exit 1; }
   mvn -q -f backend/pom.xml -DskipTests package
@@ -26,4 +26,12 @@ printf 'BeyondNet Java + PostgreSQL bank: http://localhost:%s\nKeep this window 
 mkdir -p data/runtime
 RUN_JAR="$PWD/data/runtime/bank-$(date +%Y%m%d-%H%M%S)-$(openssl rand -hex 4).jar"
 cp "$JAR" "$RUN_JAR"
-exec java -jar "$RUN_JAR" "$@"
+java -jar "$RUN_JAR" "$@" &
+BANK_PID=$!
+stop_bank() {
+  kill "$BANK_PID" 2>/dev/null || true
+  wait "$BANK_PID" 2>/dev/null || true
+}
+trap stop_bank INT TERM
+trap 'rm -f -- "$RUN_JAR"' EXIT
+wait "$BANK_PID"

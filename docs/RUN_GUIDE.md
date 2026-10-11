@@ -2,23 +2,23 @@
 
 # Final APK and command guide
 
-Release: **BeyondNet 1.3.2, build 9**. Android **10 or newer**. Demo funds only; no real UPI/bank integration. See [background relay and three-phone acceptance](BACKGROUND_RELAY.md).
+Release: **BeyondNet 1.3.3, build 10**. Android **10 or newer**. Demo funds only; no real UPI/bank integration. See [background relay and three-phone acceptance](BACKGROUND_RELAY.md).
 
 ## 1. Install the APK
 
-Copy/download `installers/BeyondNet-Android-1.3.2.apk` onto each phone and allow installation from that source when Android asks. Install over the existing app; do not uninstall or clear data. Existing enrollment remains valid. Enable relay once while visible; its notification-backed service continues with the screen closed. Bank restart, URL and fingerprint changes are unnecessary for this update.
+Copy/download `installers/BeyondNet-Android-1.3.3.apk` onto each phone and allow installation from that source when Android asks. Install over the existing app; do not uninstall or clear data. Enable relay once while visible; its notification-backed service continues with the screen closed. This release also updates Java: restart the bank once. Keep its URL and fingerprint. Published legacy demo passwords are rotated during that restart; replacement passwords are stored privately in `data/rotated-demo-passwords.json`. Sign in again if your legacy account was rotated. Other accounts retain their passwords and sessions.
 
 Optional USB installation, with phones unlocked, USB debugging enabled and the laptop authorized:
 
 ```sh
-cd /Users/shikharyadav/Desktop/Projects/BeyondNet
+cd /path/to/BeyondNet
 ./Install-Android.command
 ```
 
 Optional local Wi-Fi download:
 
 ```sh
-cd /Users/shikharyadav/Desktop/Projects/BeyondNet
+cd /path/to/BeyondNet
 ./Share-Android.command
 ```
 
@@ -29,7 +29,7 @@ Open the address printed by that helper on a phone on the same Wi-Fi. Stop the h
 This Mac is already configured. After stopping the previous bank, run:
 
 ```sh
-cd /Users/shikharyadav/Desktop/Projects/BeyondNet
+cd /path/to/BeyondNet
 ./start-bank.sh
 ```
 
@@ -38,7 +38,7 @@ Leave this terminal open. It connects to Neon PostgreSQL, builds Java if necessa
 Open **http://localhost:8080**. To read the dashboard operator key, use another terminal:
 
 ```sh
-cd /Users/shikharyadav/Desktop/Projects/BeyondNet
+cd /path/to/BeyondNet
 cat data/admin-token.txt
 ```
 
@@ -49,14 +49,14 @@ Copy just the key, without the `%` prompt symbol. It unlocks the dashboard; it i
 If ngrok is already running, keep that instance. Otherwise:
 
 ```sh
-cd /Users/shikharyadav/Desktop/Projects/BeyondNet
+cd /path/to/BeyondNet
 ./Start-Ngrok.command
 ```
 
 Keep it open. This laptop's configured address is:
 
 ```text
-https://sublime-penalty-helper.ngrok-free.dev
+https://YOUR-ASSIGNED-DOMAIN.ngrok-free.dev
 ```
 
 Use the HTTPS address printed by your running ngrok process. `ERR_NGROK_334` means that endpoint already has a running instance; use it or stop that instance before restarting. Do not add pooling for this demo.
@@ -73,10 +73,10 @@ Stop it with Ctrl+C afterward. Closing the laptop lid can still suspend it. The 
 
 In the dashboard open **Device setup**, confirm the HTTPS URL and generate the bank setup QR. On the phone use **Scan bank QR** or **Choose QR image**, review and accept the details. The QR fills both bank URL and fingerprint.
 
-If entering manually, this existing bank's fingerprint is:
+If entering manually, replace this placeholder with the dashboard's fingerprint:
 
 ```text
-2f51ebea827536d3feba922adf6e817e8ec4d95e0b226c2641f827b3ea85c855
+YOUR_BANK_FINGERPRINT
 ```
 
 On another fresh bank, use its dashboard fingerprint instead. The bank QR contains no operator key, password or PIN. First enrollment and funding require internet.
@@ -110,7 +110,7 @@ Use Ctrl+C in the bank and ngrok terminals. Neon keeps the records saved when th
 Private backup:
 
 ```sh
-cd /Users/shikharyadav/Desktop/Projects/BeyondNet
+cd /path/to/BeyondNet
 ./scripts/backup-bank.sh
 ```
 
@@ -127,9 +127,9 @@ Restart later with steps 2 and 3 using the same folder. Keep backups private: th
 The current APK is already built. To build again on this configured Mac:
 
 ```sh
-cd /Users/shikharyadav/Desktop/Projects/BeyondNet/mobile
-/Users/shikharyadav/.local/share/beyondnet-flutter/bin/flutter pub get
-/Users/shikharyadav/.local/share/beyondnet-flutter/bin/flutter build apk --release
+cd /path/to/BeyondNet/mobile
+flutter pub get
+flutter build apk --release
 ```
 
 Output: `mobile/build/app/outputs/flutter-apk/app-release.apk`. On other machines use `flutter` from PATH and configure Android SDK/JDK first. Existing-phone updates need the same signing identity; signing secrets are deliberately absent from the source ZIP.

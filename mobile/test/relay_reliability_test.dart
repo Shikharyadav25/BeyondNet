@@ -459,4 +459,100 @@ void main() {
       expect(await a.store.packet(p['id']), isNotNull);
     },
   );
+
+  test('Untrusted peers cannot reserve arbitrary future retention', () async {
+    final a = await node('retention-test');
+    final p = await makePacket(
+      'payment',
+      Map<String, dynamic>.from(fixture['box']),
+      randomCapability(),
+      nowSeconds + 86400,
+    );
+    await expectLater(
+      a.accept(p, fromPeer: 'malicious'),
+      throwsFormatException,
+    );
+    expect(await a.store.packets(), isEmpty);
+  });
+
+  test('Peer quota leaves capacity for our own durable payment', () async {
+    final a = await node('quota-test');
+    for (var i = 0; i < 100; i++) {
+      final p = await makePacket(
+        'payment',
+        Map<String, dynamic>.from(fixture['box']),
+        randomCapability(),
+        nowSeconds + 600,
+      );
+      await a.store.putPacket(p, source: 'one-peer');
+    }
+    final p = await makePacket(
+      'payment',
+      Map<String, dynamic>.from(fixture['box']),
+      randomCapability(),
+      nowSeconds + 600,
+    );
+    await expectLater(
+      a.store.putPacket(p, source: 'one-peer'),
+      throwsStateError,
+    );
+    await a.store.createPayment(p, {
+      'payment_id': 'ours',
+      'packet_id': p['id'],
+      'state': 'queued',
+    });
+    expect(await a.store.packet(p['id']), isNotNull);
+    expect((await a.store.payments()).single['payment_id'], 'ours');
+  });
+
+  test(
+    'Global foreign queue cap reserves space for a verified owned receipt',
+    () async {
+      final a = await node('owned-receipt');
+      await a.store.db.transaction((tx) async {
+        for (var i = 0; i < 900; i++) {
+          await tx.insert('packets', {
+            'id': 'foreign-$i',
+            'data': '{}',
+            'expiry': nowSeconds + 600,
+            'uploaded': 0,
+          });
+        }
+      });
+      final foreign = await makePacket(
+        'payment',
+        Map<String, dynamic>.from(fixture['box']),
+        randomCapability(),
+        nowSeconds + 600,
+      );
+      await expectLater(a.store.putPacket(foreign), throwsStateError);
+      final bank = await ed.newKeyPairFromSeed(
+        base64Decode(fixture['sign_seed']),
+      );
+      final result = await sign(bank, {
+        'v': 1,
+        'payment_id': 'received',
+        'device_id': a.deviceId,
+        'sender': 'someone@beyondnet',
+        'recipient': a.accountId,
+        'amount': 100,
+        'status': 'paid',
+        'balance_revision': 1,
+        'balance': 100100,
+        'committed_at': nowSeconds,
+      });
+      final own = await makePacket(
+        'receipt',
+        await seal(
+          base64Encode((await a.encryption.extractPublicKey()).bytes),
+          result,
+        ),
+        randomCapability(),
+        nowSeconds + 7 * 86400,
+      );
+      await a.accept(own, fromPeer: 'one-peer');
+      expect(a.account!['balance'], 100100);
+      expect(await a.store.packet(own['id']), isNotNull);
+    },
+  );
 }

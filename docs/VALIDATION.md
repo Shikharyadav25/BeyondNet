@@ -1,6 +1,27 @@
 # Validation and source audit — updated 11 October 2026
 
-Current phone release: **1.3.2+9**, Android 10+. Current backend: Java 21+ / Spring Boot 4.1.1 / PostgreSQL. Maven artifact remains `bank-1.2.0.jar`.
+Current phone release: **1.3.3+10**, Android 10+. Current backend: Java 21+ / Spring Boot 4.1.1 / PostgreSQL, artifact `bank-1.3.3.jar`.
+
+## Earlier-review improvements — release 1.3.3
+
+See [the full observation-by-observation review](REVIEW_IMPROVEMENTS.md) for fixes, previously implemented features and deliberately deferred work. This release adds credential migration, protected PIN hashes, hashed sessions, connection pooling, route/account rate limits, local-only administration, signed authenticated rejections, commit-triggered socket updates, resumable receipt cursors, reduced polling, owned-payment storage reservations and stricter relay admission.
+
+New checks include credential rotation without balance/device loss, legacy PIN upgrade, session revocation, missing-recipient/revoked-device signed rejections, bounded rate-limit state, trusted-proxy handling, administrative access, canonical control escapes, per-peer packet quota and future-expiry admission. Integration tests use isolated PostgreSQL schemas, never the public ledger.
+
+Final 1.3.3 checks on 11 October 2026:
+
+| Check | Result |
+|---|---|
+| Flutter analysis | No issues |
+| Flutter unit/widget/protocol/reliability tests | 77 passed |
+| Java checks | 34 distinct checks passed across the full run and targeted reruns; the initial Unicode fixture failure was corrected before packaging. Additional cases cover concurrent legacy PIN upgrade and protected idempotency commitments. |
+| Independent Python HTTP/WebSocket/legacy-import/QR/Dart compatibility checks | 5 passed |
+| Actual Dart engine against isolated Java/Neon bank | 1 passed; signup, PIN, top-up, online payment, live receipt, HTTP recovery, offline intermediate, duplicate gateways and expired original recovery |
+| Native Android application checks | 20 passed on the configured API 29/34 Robolectric targets; use `./gradlew :app:testDebugUnitTest` to avoid unrelated plugin test discovery tasks |
+| Release APK | Built and signature verified; version 1.3.3 / build 10, minimum API 29 |
+| Private bank backup | PostgreSQL dump and pre-update identity/configuration saved before live migration; excluded from source ZIP |
+
+Existing production records were not used for test transfers. Live credential/PIN/session migrations activate when the updated bank is started. The checks below marked 1.3.2 are historical evidence for that release.
 
 ## Funds and Bluetooth startup fixes — release 1.3.2
 
@@ -73,9 +94,9 @@ Covered behavior includes canonical wire/signature interoperability, immediate p
 
 ## Android artifact
 
-`installers/BeyondNet-Android-1.3.2.apk` is the current release; `BeyondNet-Android.apk` is an alias. Install the new APK over the existing app on every phone in the test chain. Do not uninstall or clear app data. The prior APKs are retained for reference; 1.3.0 has the startup defect described above. Bank URL, fingerprint, API and stored ledger are unchanged; no backend restart is needed for this update.
+`installers/BeyondNet-Android-1.3.3.apk` is the current release; `BeyondNet-Android.apk` is an alias. Install over the existing app. Do not uninstall or clear app data. Restart the Java bank once; retain its URL, fingerprint and ledger. Affected legacy demo accounts must renew login using the private rotated-password file. Earlier APKs are retained for reference; 1.3.0 has the startup defect described above.
 
-Current APK SHA-256: `ee1aacf0f11598ea576502ec84979c89890f0a46f614be84f9c9d2a62d53e084`, also recorded in `installers/SHA256SUMS.txt`. Release build, APK signature verification and packaged version-code/minimum-SDK checks passed; certificate matches previous releases. Previous 1.3.1 SHA-256: `7951edbe36686d7be322d0ff18919421bef37e2b50036dbc6fa942fa81ac47ca`. Previous 1.3.0 SHA-256: `d192be52ff0fc5dc4c2d764f83aaa5c147dd23af8c4ac17174c6c8226cabbf5b`. Previous 1.2.1 SHA-256: `a73f813741f08587f4b21b3cce63c731c827205027981e6cd4516e014b9952de`.
+Current APK SHA-256: `082f52535eb1b643efec3a086af37147ff79b1172f503ae0b80620902ee2ca52`, also recorded in `installers/SHA256SUMS.txt`. Signature, version-code and minimum-SDK checks passed; certificate matches previous releases. Previous 1.3.2 SHA-256: `ee1aacf0f11598ea576502ec84979c89890f0a46f614be84f9c9d2a62d53e084`. Previous 1.3.1 SHA-256: `7951edbe36686d7be322d0ff18919421bef37e2b50036dbc6fa942fa81ac47ca`. Previous 1.3.0 SHA-256: `d192be52ff0fc5dc4c2d764f83aaa5c147dd23af8c4ac17174c6c8226cabbf5b`. Previous 1.2.1 SHA-256: `a73f813741f08587f4b21b3cce63c731c827205027981e6cd4516e014b9952de`.
 
 API minimum 29, target 36, compile 37. Existing signing certificate SHA-256: `87631ca5716266c5e82f64acff27185b6b1d84bd126128546545847427a07ff2`. Distribution uses a development signing certificate; source ZIP does not contain its secret key.
 

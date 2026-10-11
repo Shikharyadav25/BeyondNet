@@ -14,6 +14,7 @@ public class BankService {
   public final Map<String, Object> trust;
   public volatile boolean online = true;
   private final byte[] signing, encryption;
+  private final byte[] pinPepper;
 
   public BankService(BankDatabase db) throws Exception {
     this.db = db;
@@ -24,7 +25,7 @@ public class BankService {
       throw new IllegalStateException(
           "Restore the existing bank-keys.json before opening this enrolled ledger");
     if (!Files.exists(file))
-      Files.writeString(
+      privateFile(
           file,
           json(
               map(
@@ -33,12 +34,21 @@ public class BankService {
                   "box",
                   b64(random(32)),
                   "mesh_id",
-                  HexFormat.of().formatHex(random(16)))),
-          StandardOpenOption.CREATE_NEW);
+                  HexFormat.of().formatHex(random(16)))));
     protect(file, "rw-------");
     Map<String, Object> keys = parse(Files.readString(file));
     signing = unb64((String) keys.get("sign"));
     encryption = unb64((String) keys.get("box"));
+    Path pepper = db.directory.resolve("pin-pepper.txt");
+    if (!Files.exists(pepper)) {
+      if (db.read(c -> scalar(c, "SELECT COUNT(*) FROM payment_pins WHERE hash LIKE 'v2:%'")) > 0
+          || db.read(c -> scalar(c, "SELECT COUNT(*) FROM payments WHERE hash LIKE 'hmac:%'")) > 0)
+        throw new IllegalStateException("Restore pin-pepper.txt before opening this bank");
+      privateFile(pepper, b64(random(32)));
+    }
+    protect(pepper, "rw-------");
+    pinPepper = unb64(Files.readString(pepper).strip());
+    if (pinPepper.length != 32) throw new IllegalStateException("Invalid PIN pepper");
     Map<String, Object> t =
         map(
             "sign_key",
@@ -49,8 +59,49 @@ public class BankService {
             keys.get("mesh_id"));
     t.put("fingerprint", digest(t));
     trust = Collections.unmodifiableMap(t);
+    migrateCredentials();
     System.out.println("BeyondNet Spring Boot bank · fingerprint: " + trust.get("fingerprint"));
     System.out.println("Operator key file: " + db.directory.resolve("admin-token.txt"));
+  }
+
+  /** Preserve the ledger and device IDs, while removing published legacy credentials. */
+  private void migrateCredentials() throws Exception {
+    Path recovery = db.directory.resolve("rotated-demo-passwords.json");
+    Map<String, Object> replacements = Files.exists(recovery)
+        ? parse(Files.readString(recovery)) : new LinkedHashMap<>();
+    Map<String, String> hashes = new LinkedHashMap<>();
+    for (String prefix : List.of("alice", "relay", "gateway", "chai")) {
+      String id = prefix + (prefix.equals("chai") ? "@beyond" : "@beyondnet");
+      Map<String, Object> a = db.read(c -> one(c, "SELECT * FROM accounts WHERE id=?", id));
+      if (a != null && equal(passwordHash(prefix + "-demo-pass", (byte[]) a.get("salt")),
+          (String) a.get("password"))) {
+        String replacement = token();
+        replacements.put(id, replacement);
+        hashes.put(id, passwordHash(replacement, (byte[]) a.get("salt")));
+      }
+    }
+    if (!hashes.isEmpty()) {
+      Path temporary = db.directory.resolve(".rotated-demo-passwords-" + UUID.randomUUID());
+      privateFile(temporary, json(replacements));
+      try {
+        Files.move(temporary, recovery, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+      } catch (AtomicMoveNotSupportedException e) {
+        Files.move(temporary, recovery, StandardCopyOption.REPLACE_EXISTING);
+      }
+    }
+    db.tx(c -> {
+      for (var entry : hashes.entrySet()) {
+        update(c, "UPDATE accounts SET password=? WHERE id=?", entry.getValue(), entry.getKey());
+        update(c, "DELETE FROM sessions WHERE account=?", entry.getKey());
+        event(c, "legacy_password_rotated", map("account", entry.getKey()));
+      }
+      for (Map<String, Object> session : rows(c, "SELECT token FROM sessions")) {
+        String old = (String) session.get("token");
+        if (!old.startsWith("sha256:"))
+          update(c, "UPDATE sessions SET token=? WHERE token=?", sessionHash(old), old);
+      }
+      return null;
+    });
   }
 
   public Map<String, Object> health() {
@@ -102,12 +153,41 @@ public class BankService {
               one(
                   c,
                   "SELECT account FROM sessions WHERE token=? AND expiry>?",
-                  bearer(header),
+                  sessionHash(bearer(header)),
                   now());
           if (r == null)
             throw new BankException(401, "Sign in online again; your session has expired");
           return (String) r.get("account");
         });
+  }
+
+  static String sessionHash(String token) {
+    return "sha256:" + hash(token.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+  }
+
+  private String pinHash(String pin, byte[] salt) {
+    try {
+      var hmac = javax.crypto.Mac.getInstance("HmacSHA256");
+      hmac.init(new javax.crypto.spec.SecretKeySpec(pinPepper, "HmacSHA256"));
+      return "v2:" + passwordHash(b64(hmac.doFinal(pin.getBytes(java.nio.charset.StandardCharsets.UTF_8))), salt);
+    } catch (java.security.GeneralSecurityException e) {
+      throw new IllegalStateException("PIN protection unavailable", e);
+    }
+  }
+
+  private String instructionHash(Map<String, Object> body) {
+    try {
+      var hmac = javax.crypto.Mac.getInstance("HmacSHA256");
+      hmac.init(new javax.crypto.spec.SecretKeySpec(pinPepper, "HmacSHA256"));
+      hmac.update("beyondnet/idempotency/v1\0".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+      return "hmac:" + HexFormat.of().formatHex(hmac.doFinal(canonical(body)));
+    } catch (java.security.GeneralSecurityException e) {
+      throw new IllegalStateException("Payment instruction protection unavailable", e);
+    }
+  }
+
+  public void logout(String header) {
+    db.read(c -> update(c, "DELETE FROM sessions WHERE token=?", sessionHash(bearer(header))));
   }
 
   public void admin(String header) {
@@ -130,7 +210,7 @@ public class BankService {
         rows(
             c,
             "SELECT d.certificate FROM devices d JOIN accounts a ON a.id=d.account WHERE"
-                + " a.role='merchant' AND d.revoked=0"))
+                + " a.role='merchant' AND d.revoked=0 AND a.id NOT LIKE 'sim-shop-%'"))
       out.add(parse((String) r.get("certificate")));
     return out;
   }
@@ -138,16 +218,20 @@ public class BankService {
   public Map<String, Object> login(Map<String, Object> body) {
     String aid = text(body, "account", 0, 100).strip().toLowerCase(Locale.ROOT),
         password = text(body, "password", 0, 128);
+    Map<String, Object> candidate = db.read(c -> one(c, "SELECT * FROM accounts WHERE id=?", aid));
+    // Password hashing must not hold the financial transaction lock.
+    if (candidate == null || !equal(passwordHash(password, (byte[]) candidate.get("salt")),
+        (String) candidate.get("password")))
+      throw new BankException(401, "Account or demo password is incorrect");
     return db.tx(
         c -> {
           Map<String, Object> a = one(c, "SELECT * FROM accounts WHERE id=?", aid);
-          if (a == null
-              || !equal(passwordHash(password, (byte[]) a.get("salt")), (String) a.get("password")))
+          if (a == null || !equal((String) candidate.get("password"), (String) a.get("password")))
             throw new BankException(401, "Account or demo password is incorrect");
           String token = token();
           long expiry = now() + 7 * 86400;
           update(c, "DELETE FROM sessions WHERE expiry<?", now());
-          update(c, "INSERT INTO sessions VALUES(?,?,?)", token, aid, expiry);
+          update(c, "INSERT INTO sessions VALUES(?,?,?)", sessionHash(token), aid, expiry);
           return map(
               "token",
               token,
@@ -193,12 +277,17 @@ public class BankService {
   public Map<String, Object> configurePin(String aid, Map<String, Object> body) {
     String pin = text(body, "pin", 6, 6), password = text(body, "password", 8, 128);
     if (!pin.matches("[0-9]{6}")) throw new BankException(422, "Use a six-digit payment PIN");
+    Map<String, Object> candidate = db.read(c -> one(c, "SELECT * FROM accounts WHERE id=?", aid));
+    if (candidate == null || !equal(passwordHash(password, (byte[]) candidate.get("salt")),
+        (String) candidate.get("password")))
+      throw new BankException(401, "Account password is incorrect");
+    byte[] salt = random(16);
+    String protectedPin = pinHash(pin, salt);
     return db.tx(
         c -> {
           Map<String, Object> a = one(c, "SELECT * FROM accounts WHERE id=?", aid);
-          if (!equal(passwordHash(password, (byte[]) a.get("salt")), (String) a.get("password")))
+          if (a == null || !equal((String) candidate.get("password"), (String) a.get("password")))
             throw new BankException(401, "Account password is incorrect");
-          byte[] salt = random(16);
           update(
               c,
               "INSERT INTO payment_pins(account,salt,hash,failed,locked_until) VALUES(?,?,?,0,0) ON"
@@ -206,7 +295,7 @@ public class BankService {
                   + " salt=excluded.salt,hash=excluded.hash,failed=0,locked_until=0",
               aid,
               salt,
-              passwordHash(pin, salt));
+              protectedPin);
           event(c, "payment_pin_configured", map("account", aid));
           return map("account", snapshot(c, aid));
         });
@@ -409,7 +498,7 @@ public class BankService {
               c ->
                   one(
                       c,
-                      "SELECT * FROM devices WHERE id=? AND account=? AND revoked=0",
+                  "SELECT * FROM devices WHERE id=? AND account=?",
                       body.get("device_id"),
                       body.get("sender")));
       if (device == null) throw new IllegalArgumentException();
@@ -422,7 +511,17 @@ public class BankService {
           400, "Payment validation failed: invalid packet, signature or encrypted instruction");
     }
     // The signed instruction, not a route or gateway identity, owns the financial idempotency key.
-    String requestHash = digest(body);
+    // A plain digest of a body containing a six-digit PIN is itself a guessing
+    // oracle after a database leak. Protect the idempotency commitment too.
+    String requestHash = instructionHash(body);
+    Map<String, Object> pinRow = db.read(c -> one(c, "SELECT * FROM payment_pins WHERE account=?", body.get("sender")));
+    String suppliedHash = pinRow == null || integer(body.get("v")) != 2 ? "" :
+        ((String) pinRow.get("hash")).startsWith("v2:")
+            ? pinHash((String) body.get("pin"), (byte[]) pinRow.get("salt"))
+            : passwordHash((String) body.get("pin"), (byte[]) pinRow.get("salt"));
+    String upgradedHash = pinRow != null && !((String) pinRow.get("hash")).startsWith("v2:")
+        && equal(suppliedHash, (String) pinRow.get("hash"))
+        ? pinHash((String) body.get("pin"), (byte[]) pinRow.get("salt")) : null;
     return db.tx(
         c -> {
           Map<String, Object> existing =
@@ -432,9 +531,13 @@ public class BankService {
                   body.get("sender"),
                   body.get("payment_id"));
           if (existing != null) {
-            if (!requestHash.equals(existing.get("hash")))
+            String previous = (String) existing.get("hash");
+            if (!equal(previous.startsWith("hmac:") ? requestHash : digest(body), previous))
               throw new BankException(
                   409, "Payment ID was already used for a different instruction");
+            if (!previous.startsWith("hmac:"))
+              update(c, "UPDATE payments SET hash=? WHERE sender=? AND id=?",
+                  requestHash, body.get("sender"), body.get("payment_id"));
             event(
                 c,
                 "duplicate_recovered",
@@ -446,28 +549,28 @@ public class BankService {
                 JSON.readValue((String) existing.get("receipts"), List.class));
           }
           Map<String, Object> d =
-              one(c, "SELECT * FROM devices WHERE id=? AND revoked=0", body.get("device_id"));
+              one(c, "SELECT * FROM devices WHERE id=?", body.get("device_id"));
           if (d == null) throw new BankException(400, "Sender device was revoked");
           Map<String, Object>
               sender = one(c, "SELECT * FROM accounts WHERE id=?", body.get("sender")),
               recipient = one(c, "SELECT * FROM accounts WHERE id=?", body.get("recipient"));
           List<Map<String, Object>> targets =
               rows(c, "SELECT * FROM devices WHERE account=? AND revoked=0", body.get("recipient"));
-          if (sender == null
-              || recipient == null
-              || targets.isEmpty()
-              || body.get("sender").equals(body.get("recipient")))
-            throw new BankException(400, "Recipient must be a different enrolled account");
           long timestamp = now(), n = integer(body.get("amount"));
           String reason = "";
-          if (integer(body.get("created_at")) > timestamp + 60)
+          if (((Number) d.get("revoked")).longValue() != 0)
+            reason = "Sender device was revoked";
+          else if (sender == null || recipient == null || targets.isEmpty()
+              || body.get("sender").equals(body.get("recipient")))
+            reason = "Recipient must be a different enrolled account";
+          else if (integer(body.get("created_at")) > timestamp + 60)
             reason = "Device clock is ahead of the bank";
           else if (integer(body.get("expires_at")) <= timestamp)
             reason = "Authorization expired before bank submission";
           else if (integer(body.get("v")) != 2)
             reason = "Update BeyondNet and set a payment PIN before making new payments";
           else
-            reason = checkPin(c, (String) body.get("sender"), (String) body.get("pin"), timestamp);
+            reason = checkPin(c, (String) body.get("sender"), pinRow, suppliedHash, upgradedHash, timestamp);
           if (reason.isEmpty() && ((Number) sender.get("balance")).longValue() < n)
             reason = "Insufficient demo balance";
           String status = reason.isEmpty() ? "paid" : "rejected", ref = reference("OK-");
@@ -592,12 +695,21 @@ public class BankService {
         });
   }
 
-  private String checkPin(Connection c, String aid, String pin, long time) throws Exception {
+  private String checkPin(Connection c, String aid, Map<String, Object> expected,
+      String suppliedHash, String upgradedHash, long time) throws Exception {
     Map<String, Object> row = one(c, "SELECT * FROM payment_pins WHERE account=?", aid);
     if (row == null) return "Set your payment PIN online before paying";
+    if (expected == null) return "Payment PIN changed; authorize a new payment";
+    if (!equal((String) row.get("hash"), (String) expected.get("hash"))) {
+      // Another valid authorization may have upgraded this same legacy PIN.
+      // A true PIN reset uses a new salt and cannot match this derived hash.
+      if (upgradedHash != null && equal((String) row.get("hash"), upgradedHash))
+        suppliedHash = upgradedHash;
+      else return "Payment PIN changed; authorize a new payment";
+    }
     if (((Number) row.get("locked_until")).longValue() > time)
       return "Payment PIN is temporarily locked; retry a new payment after 10 minutes";
-    if (!equal(passwordHash(pin, (byte[]) row.get("salt")), (String) row.get("hash"))) {
+    if (!equal(suppliedHash, (String) row.get("hash"))) {
       int failures = ((Number) row.get("failed")).intValue() + 1;
       update(
           c,
@@ -607,6 +719,7 @@ public class BankService {
           aid);
       return "Payment PIN is incorrect";
     }
+    if (upgradedHash != null) update(c, "UPDATE payment_pins SET hash=? WHERE account=?", upgradedHash, aid);
     update(c, "UPDATE payment_pins SET failed=0,locked_until=0 WHERE account=?", aid);
     return "";
   }

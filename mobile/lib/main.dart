@@ -1746,8 +1746,7 @@ class _PayState extends State<PayPage> {
         builder: (_) => PaymentPinDialog(
           amount: value,
           recipient:
-              selected!['body']['display_name'] ??
-              selected!['body']['account_id'],
+              '${selected!['body']['display_name'] ?? "Recipient"}\n${selected!['body']['account_id']}',
         ),
       );
       if (enteredPin == null) return;

@@ -109,7 +109,7 @@ Implement `health`, `signup`, `login`, `account`, `me`, `snapshot`, `register`, 
 - PIN setup/reset requires an online session plus account password. Hash the six-digit demo PIN with scrypt; payment PIN and phone screen-lock code are different.
 - Five distinct wrong-PIN attempts lock authorization for ten minutes. Replaying an already-recorded rejection must not increment attempts again.
 
-Add [demo-accounts.json](../backend/src/main/resources/demo-accounts.json) only as demo seed configuration. Normal signup must work without adopting those credentials. A source copy with fresh data creates a new bank identity; it does not inherit this laptop's accounts.
+Fresh banks start empty. Implement signup with caller-selected passwords and zero balance; never ship reusable account passwords as seed data. The compatibility migration rotates only known old demo passwords, preserves account IDs and balances, and writes replacements to a private recovery file. A source copy with fresh data creates a new bank identity; it does not inherit this laptop's accounts.
 
 ## 7. Implement atomic funding and immediate settlement
 
@@ -253,7 +253,7 @@ Output: `mobile/build/app/outputs/flutter-apk/app-release.apk`. Confirm version,
 1. From the project root run `./start-bank.sh`. On this Mac it connects to Neon (fresh local setups can start local PostgreSQL), builds Java if needed and runs an immutable JAR copy. Keep this window open.
 2. Open `http://localhost:8080`. Read the operator key with `cat data/admin-token.txt`, then unlock the dashboard.
 3. In another terminal run `./Start-Ngrok.command` if ngrok is not already running. Keep it open. This laptop's assigned address is saved locally; use the URL from the running tunnel. The laptop must stay awake and online.
-4. Generate a bank setup QR in Device setup. Install APK 1.3.2 on Android 10+ phones; scan/select the QR. Signup/enroll online, configure demo PIN and fund the payer. Use three phones to demonstrate an offline intermediate; see [BACKGROUND_RELAY.md](BACKGROUND_RELAY.md).
+4. Generate a bank setup QR in Device setup. Install APK 1.3.3 on Android 10+ phones; scan/select the QR. Signup/enroll online, configure demo PIN and fund the payer. Use three phones to demonstrate an offline intermediate; see [BACKGROUND_RELAY.md](BACKGROUND_RELAY.md).
 5. First prove a small online payment. Match payment ID, bank reference, receipt and balances across both phones/dashboard.
 6. Keep the second phone online with relay enabled and visible. Turn off internet on the payer, leave Bluetooth enabled, grant required permissions, scan and connect. Pay by ID or recipient QR.
 7. Confirm the returned bank-signed receipt on the payer, incoming receipt on the merchant, and exactly one debit/credit on the bank. The laptop need not be near either phone.
@@ -267,4 +267,4 @@ Stop with Ctrl+C and restart with the same launch command; PostgreSQL and key fi
 
 Run `python3 scripts/package_source.py`; output is `dist/BeyondNet-source.zip`. Do not distribute `data/`, signing keys, SDK paths, caches or private backups. The cleaned project no longer contains the Python bank or unfinished iPhone source. The local cleanup archive in `data/backups/` preserves removed files without putting obsolete runtime code into the source package.
 
-Future work: physical background/multi-hop acceptance and reliability/power metrics, Wi-Fi transport, production signing/key recovery, scalable database locking/pooling, deployment/monitoring, independent security review and authorized real payment integration. Android background relay is implemented in 1.3.2.
+Future work: physical background/multi-hop acceptance and reliability/power metrics, Wi-Fi transport, production signing/key recovery, scalable financial locking, deployment/monitoring, independent security review and authorized real payment integration. Android background relay is already implemented; release 1.3.3 adds connection pooling and other [review improvements](REVIEW_IMPROVEMENTS.md).

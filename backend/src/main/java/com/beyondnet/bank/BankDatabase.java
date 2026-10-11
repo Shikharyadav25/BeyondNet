@@ -8,6 +8,8 @@ import java.nio.file.*;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.sql.*;
 import java.util.*;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -17,6 +19,8 @@ public class BankDatabase implements AutoCloseable {
   private final FileChannel lockChannel;
   private final FileLock lease;
   private final String url, user, password, schema;
+  private final HikariDataSource pool;
+  final List<Runnable> commitListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
 
   public BankDatabase() {
     this(
@@ -64,6 +68,18 @@ public class BankDatabase implements AutoCloseable {
       lease = lockChannel.tryLock();
       if (lease == null)
         throw new IllegalStateException("Another Java bank owns this data directory");
+      HikariConfig pooling = new HikariConfig();
+      pooling.setJdbcUrl(url);
+      pooling.setUsername(user);
+      pooling.setPassword(password);
+      pooling.setMaximumPoolSize(4);
+      pooling.setMinimumIdle(0);
+      pooling.setConnectionTimeout(10000);
+      pooling.setConnectionInitSql("SET search_path TO " + schema
+          + "; SET statement_timeout='60s'; SET lock_timeout='30s'");
+      pooling.addDataSourceProperty("connectTimeout", "5");
+      pooling.addDataSourceProperty("socketTimeout", "65");
+      pool = new HikariDataSource(pooling);
       // Schema is validated above. Test schemas keep every test isolated from real records.
       try (Connection c = rawConnect()) {
         execute(c, "CREATE SCHEMA IF NOT EXISTS " + schema);
@@ -77,30 +93,12 @@ public class BankDatabase implements AutoCloseable {
             }
             if (Files.exists(directory.resolve("bank.sqlite3")))
               LegacySqliteImport.importInto(c, directory.resolve("bank.sqlite3"));
-            // An existing ledger keeps its exact account set; seed only a genuinely empty bank.
-            if (scalar(c, "SELECT COUNT(*) FROM accounts") == 0) {
-              try (var input = getClass().getResourceAsStream("/demo-accounts.json")) {
-                List<?> seeds = JSON.readValue(input, List.class);
-                for (Object entry : seeds) {
-                  List<?> a = (List<?>) entry;
-                  byte[] salt = random(16);
-                  update(
-                      c,
-                      "INSERT INTO accounts VALUES(?,?,?,?,?,?)",
-                      a.get(0),
-                      a.get(1),
-                      a.get(2),
-                      a.get(3),
-                      salt,
-                      passwordHash((String) a.get(4), salt));
-                }
-              }
-            }
+            // Fresh banks start empty: users sign up with their own credentials.
             update(c, "UPDATE accounts SET role='customer' WHERE role='relay'");
             return null;
           });
       Path file = directory.resolve("admin-token.txt");
-      if (!Files.exists(file)) Files.writeString(file, token(), StandardOpenOption.CREATE_NEW);
+      if (!Files.exists(file)) privateFile(file, token());
       protect(file, "rw-------");
       operatorKey = Files.readString(file).trim();
     } catch (Exception e) {
@@ -126,16 +124,7 @@ public class BankDatabase implements AutoCloseable {
   }
 
   public Connection connect() throws SQLException {
-    Connection c = rawConnect();
-    try {
-      execute(c, "SET search_path TO " + schema);
-      execute(c, "SET statement_timeout='60s'");
-      execute(c, "SET lock_timeout='30s'");
-      return c;
-    } catch (SQLException e) {
-      c.close();
-      throw e;
-    }
+    return pool.getConnection();
   }
 
   @FunctionalInterface
@@ -154,7 +143,7 @@ public class BankDatabase implements AutoCloseable {
   }
 
   public <T> T tx(Work<T> work) {
-    return read(
+    T result = read(
         c -> {
           c.setAutoCommit(false);
           try {
@@ -162,9 +151,9 @@ public class BankDatabase implements AutoCloseable {
             // processes.
             // READ COMMITTED gives a fresh snapshot after the previous lock holder commits.
             execute(c, "SELECT pg_advisory_xact_lock(724190,hashtext(current_schema()))");
-            T result = work.run(c);
+            T outcome = work.run(c);
             c.commit();
-            return result;
+            return outcome;
           } catch (Exception e) {
             try {
               c.rollback();
@@ -174,6 +163,11 @@ public class BankDatabase implements AutoCloseable {
             throw e;
           }
         });
+    // Notify only after commit and after returning the connection to the pool.
+    for (Runnable listener : commitListeners) {
+      try { listener.run(); } catch (RuntimeException ignored) { }
+    }
+    return result;
   }
 
   public String namespace() {
@@ -241,10 +235,23 @@ public class BankDatabase implements AutoCloseable {
 
   @PreDestroy
   public void close() {
+    pool.close();
     try {
       if (lease != null && lease.isValid()) lease.release();
       lockChannel.close();
     } catch (Exception ignored) {
     }
+  }
+
+  /** Restrict access from the first filesystem operation, before writing secrets. */
+  public static void privateFile(Path file, String content) throws Exception {
+    try {
+      Files.createFile(file, PosixFilePermissions.asFileAttribute(
+          PosixFilePermissions.fromString("rw-------")));
+    } catch (UnsupportedOperationException e) {
+      Files.createFile(file);
+      protect(file, "rw-------");
+    }
+    Files.writeString(file, content, StandardOpenOption.WRITE);
   }
 }

@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.*;
 
 @RestController
 public class BankController {
+  private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(BankController.class);
   private final BankService bank;
   private final RehearsalService rehearsal;
 
@@ -35,6 +36,12 @@ public class BankController {
   @PostMapping("/api/signup")
   public Object signup(@RequestBody Map<String, Object> b) {
     return bank.signup(b);
+  }
+
+  @PostMapping("/api/logout")
+  public Object logout(@RequestHeader(value = "Authorization", required = false) String h) {
+    bank.logout(h);
+    return map("logged_out", true);
   }
 
   @GetMapping("/api/me")
@@ -143,8 +150,20 @@ public class BankController {
     return ResponseEntity.badRequest().body(map("detail", "Invalid JSON body"));
   }
 
+  @ExceptionHandler({org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class,
+      org.springframework.web.bind.MissingServletRequestParameterException.class})
+  public ResponseEntity<?> invalidParameter() {
+    return ResponseEntity.badRequest().body(map("detail", "Invalid request parameter"));
+  }
+
+  @ExceptionHandler(org.springframework.web.HttpMediaTypeNotSupportedException.class)
+  public ResponseEntity<?> invalidContentType() {
+    return ResponseEntity.status(415).body(map("detail", "Send application/json"));
+  }
+
   @ExceptionHandler(Exception.class)
   public ResponseEntity<?> unexpected(Exception e) {
+    LOG.error("Bank request failed ({})", e.getClass().getSimpleName());
     return ResponseEntity.internalServerError()
         .body(map("detail", "Bank could not complete this request; retain it and retry"));
   }

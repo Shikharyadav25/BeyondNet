@@ -1,6 +1,6 @@
 > **Current laptop configuration:** PostgreSQL is now on Neon. The launcher uses the private remote configuration and skips local database startup. See [Neon setup and restart guide](NEON_SETUP.md). Local-cluster instructions below apply only to a fresh local development setup.
 
-# Bank setup QR in app 1.2.1
+# Bank setup and updates — release 1.3.3
 
 Open the bank dashboard → **Device setup**. Confirm the public HTTPS URL (this laptop's saved ngrok URL is prefilled), then click **Generate setup QR**. The QR embeds exactly the bank HTTPS URL and current trust fingerprint, plus a format/type version. It contains no password, PIN, account session or operator key.
 
@@ -10,7 +10,7 @@ Use a QR from your trusted dashboard. The QR is a convenient transfer of trust d
 
 Install `installers/BeyondNet-Android-1.2.1.apk` over the existing app. Version 1.2.0 payment/PIN behavior remains compatible; only the bank setup UI is new. The downloadable `installers/BeyondNet-bank-setup.png` is this laptop's current public setup QR. A fresh source checkout can set `BEYONDNET_PUBLIC_URL` or `data/public-url.txt` to prefill its dashboard URL, or enter it in Device setup.
 
-The existing Java bank JAR artifact name remains `bank-1.2.0.jar`; launchers rebuild and run the updated code automatically. No database reset or key rotation is needed for this feature.
+The Java bank artifact is `bank-1.3.3.jar`; launchers rebuild and run updated code automatically. Restart the bank once for this release. It preserves bank identity and balances, hashes stored session tokens, and rotates only the published legacy demo passwords. Their new passwords are saved privately in `data/rotated-demo-passwords.json`; affected phones should renew login. Keep `data/pin-pepper.txt` with bank backups.
 
 ---
 
@@ -23,7 +23,7 @@ The active bank is Java 21+ / Spring Boot 4.1.1 with PostgreSQL. The phone app r
 Open Terminal, then run:
 
 ```sh
-cd /Users/shikharyadav/Desktop/Projects/BeyondNet
+cd /path/to/BeyondNet
 ./start-bank.sh
 ```
 
@@ -32,7 +32,7 @@ Leave this terminal open. On this configured laptop it connects to Neon, builds 
 Open **http://localhost:8080** for the dashboard. In another terminal, read the existing operator key:
 
 ```sh
-cd /Users/shikharyadav/Desktop/Projects/BeyondNet
+cd /path/to/BeyondNet
 cat data/admin-token.txt
 ```
 
@@ -41,11 +41,11 @@ Copy only the key, excluding any `%` prompt symbol. It unlocks the bank dashboar
 For phones to reach the bank, open a separate terminal:
 
 ```sh
-cd /Users/shikharyadav/Desktop/Projects/BeyondNet
+cd /path/to/BeyondNet
 ./Start-Ngrok.command
 ```
 
-Keep an already-running ngrok process instead of launching a duplicate. This account's assigned URL remains **https://sublime-penalty-helper.ngrok-free.dev**. Use the URL actually printed by ngrok if running under a different account. The Mac must remain awake and online during testing. PostgreSQL continues storing records when the bank or tunnel is stopped; this is local hosting, not an always-online cloud deployment.
+Keep an already-running ngrok process instead of launching a duplicate. Use the HTTPS URL printed by your ngrok account, such as **https://YOUR-ASSIGNED-DOMAIN.ngrok-free.dev**. The Mac must remain awake and online during testing. PostgreSQL continues storing records when the bank or tunnel is stopped. The dashboard is available only on the bank computer at localhost.
 
 To stop the bank, press **Ctrl+C** in its terminal. PostgreSQL remains running. To also stop the dedicated database after the bank is stopped, run `./scripts/stop-postgres.sh`. Restart with the same bank command. Do not delete `data/`.
 
@@ -103,7 +103,7 @@ Java reads `BEYONDNET_DB_CONFIG` (default `data/postgres.properties`) and enviro
 
 ```sh
 mvn -f backend/pom.xml -DskipTests package
-java -jar backend/target/bank-1.2.0.jar
+java -jar backend/target/bank-1.3.3.jar
 ```
 
 The launcher's automatic backup/setup assumes this project's default local data/database. For custom or remote deployments, take a database dump and identity backup for that deployment before importing. Keep PostgreSQL private; expose only bank HTTPS/WSS through the tunnel.

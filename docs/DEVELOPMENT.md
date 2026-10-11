@@ -10,7 +10,7 @@ From the project root:
 ./start-bank.sh
 ```
 
-Manual backend build: `mvn -f backend/pom.xml package`. With PostgreSQL configured, run `java -jar backend/target/bank-1.2.0.jar` from the project root. The versioned JAR name is independent of phone version 1.3.2. Dashboard: `http://localhost:8080`. Custom Java port: `--server.port=8081`.
+Manual backend build: `mvn -f backend/pom.xml package`. With PostgreSQL configured, run `java -jar backend/target/bank-1.3.3.jar` from the project root. The versioned JAR name is independent of phone version 1.3.3. Dashboard: `http://localhost:8080`. Custom Java port: `--server.port=8081`.
 
 Build Android:
 
@@ -42,7 +42,7 @@ Set `FLUTTER_BIN` if Flutter is not on PATH. Tests use temporary bank identities
 - Use a single timestamp for creation and the 600-second authorization deadline. Save ciphertext and redacted intent atomically; never save/log plaintext PINs.
 - Put all bank financial read/check/write work inside `BankDatabase.tx`. Its database advisory lock and uniqueness constraints prevent duplicate debit and overspending across gateways/instances.
 - Verify signed receipts against the original intent. A transport acknowledgment, timeout or local expiry is not settlement or refund.
-- Keep private `data/` out of Git and distributions. Preserve bank keys/operator key alongside PostgreSQL backups.
+- Keep private `data/` out of Git and distributions. Preserve bank keys, `pin-pepper.txt`, operator key and any rotated-password recovery file alongside PostgreSQL backups. Losing the pepper prevents validation of protected PINs; restore it rather than regenerating it.
 - Keep the legacy wire domain, BLE UUIDs and application ID: these are compatibility identifiers, not stale product branding.
 
 Package clean source with `python3 scripts/package_source.py`; output is `dist/BeyondNet-source.zip`. The package excludes identities, databases, dependency caches, native signing files and compiled APKs. Installation and restart instructions are in [SPRING_BOOT_SETUP.md](SPRING_BOOT_SETUP.md).

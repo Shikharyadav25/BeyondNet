@@ -334,7 +334,12 @@ void main() {
   test(
     'Real engine authenticates peer command and ACKs only persisted packet',
     () async {
-      final p = Map<String, dynamic>.from(fixture['packet']);
+      final p = await makePacket(
+        'payment',
+        Map<String, dynamic>.from(fixture['packet']['box']),
+        randomCapability(),
+        nowSeconds + 600,
+      );
       final wire = await sender.signedRpc({
         'op': 'put',
         'packet': p,
@@ -617,7 +622,9 @@ void main() {
         await e.store.init(
           databasePath: '${directory.path}/funding-device.sqlite3',
         );
-        await e.addDemoMoney(50000);
+        await expectLater(e.addDemoMoney(50000), throwsStateError);
+        expect(bodies.length, 1);
+        await e.addDemoMoney(100000);
         expect(bodies[1], bodies[0]);
         expect(await e.store.config('pending_topup'), isNull);
         expect(e.account!['balance'], 100000);

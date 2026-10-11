@@ -11,7 +11,7 @@ class LocalStore {
         '${(await getApplicationSupportDirectory()).path}/offline-karo.sqlite3';
     db = await openDatabase(
       path,
-      version: 2,
+      version: 3,
       onConfigure: (db) async {
         // This assignment returns a row. Android's execSQL rejects statements
         // with results, so use the query path even though it sets a value.
@@ -20,10 +20,13 @@ class LocalStore {
       },
       onUpgrade: (db, old, _) async {
         if (old < 2) await _createRelayTables(db);
+        if (old < 3) {
+          await db.execute('ALTER TABLE packets ADD COLUMN source TEXT');
+        }
       },
       onCreate: (db, _) async {
         await db.execute(
-          'CREATE TABLE packets(id TEXT PRIMARY KEY, data TEXT NOT NULL, expiry INTEGER NOT NULL, uploaded INTEGER NOT NULL DEFAULT 0)',
+          'CREATE TABLE packets(id TEXT PRIMARY KEY, data TEXT NOT NULL, expiry INTEGER NOT NULL, uploaded INTEGER NOT NULL DEFAULT 0, source TEXT)',
         );
         await db.execute(
           'CREATE TABLE payments(id TEXT PRIMARY KEY, data TEXT NOT NULL)',
@@ -65,7 +68,7 @@ class LocalStore {
     whereArgs: [packet, nowSeconds, nowSeconds - 90],
   )).map((row) => row['peer'] as String).toSet();
 
-  Future<bool> putPacket(Json p, {bool owned = false}) async {
+  Future<bool> putPacket(Json p, {bool owned = false, String? source}) async {
     await checkPacket(p);
     return db.transaction((tx) async {
       final existing = await tx.query(
@@ -97,7 +100,17 @@ class LocalStore {
       final count = Sqflite.firstIntValue(
         await tx.rawQuery('SELECT COUNT(*) FROM packets'),
       )!;
-      if (count >= 1000 || used + canonical(p).length > 10 * 1024 * 1024) {
+      final peerCount = source == null
+          ? 0
+          : Sqflite.firstIntValue(
+              await tx.rawQuery('SELECT COUNT(*) FROM packets WHERE source=?', [
+                source,
+              ]),
+            )!;
+      // Reserve 100 slots and 2 MiB for this phone's own payment authorizations.
+      if (count >= (owned ? 1000 : 900) ||
+          used + canonical(p).length > (owned ? 10 : 8) * 1024 * 1024 ||
+          (!owned && peerCount >= 100)) {
         throw StateError(
           'Relay storage full. Retain the sender copy and retry later.',
         );
@@ -107,6 +120,7 @@ class LocalStore {
         'data': jsonEncode(clean),
         'expiry': p['expires_at'],
         'uploaded': 0,
+        'source': source,
       });
       return true;
     });
