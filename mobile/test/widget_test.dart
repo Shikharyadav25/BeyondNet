@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:beyondnet/main.dart';
 import 'package:beyondnet/engine.dart';
@@ -16,6 +17,65 @@ Future<void> scroll(WidgetTester tester, Finder finder, double delta) =>
     );
 
 void main() {
+  test(
+    'Platform exception dialogs use actionable copy instead of native stack traces',
+    () {
+      expect(
+        userErrorMessage(
+          PlatformException(
+            code: 'IllegalStateException',
+            message: 'java.lang.IllegalStateException Stacktrace: at es0.l',
+          ),
+        ),
+        isNot(contains('Stacktrace')),
+      );
+      expect(
+        userErrorMessage(
+          PlatformException(
+            code: 'relay',
+            message: 'Turn Bluetooth on to resume relaying.',
+          ),
+        ),
+        'Turn Bluetooth on to resume relaying.',
+      );
+    },
+  );
+  testWidgets(
+    'Bank insufficient-funds rejection is prominent above delivery steps',
+    (tester) async {
+      final e = BeyondNetEngine();
+      e.payments = [
+        {
+          'payment_id': 'rejected',
+          'sender': 'sam@beyondnet',
+          'recipient': 'shop@beyondnet',
+          'amount': 1000,
+          'created_at': 1,
+          'expires_at': 2,
+          'state': 'rejected',
+          'transport': 'Bank signature verified',
+          'receipt': {
+            'reason': 'Insufficient demo balance',
+            'bank_ref': 'OK-TEST',
+            'committed_at': 3,
+          },
+        },
+      ];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PaymentDetails(engine: e, id: 'rejected'),
+        ),
+      );
+      expect(find.text('Payment rejected'), findsOneWidget);
+      expect(
+        find.text('Insufficient demo balance').hitTestable(),
+        findsOneWidget,
+      );
+      expect(find.text('On its way'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      e.dispose();
+    },
+  );
   testWidgets('Payment detail never labels an expired unknown request Paid', (
     tester,
   ) async {

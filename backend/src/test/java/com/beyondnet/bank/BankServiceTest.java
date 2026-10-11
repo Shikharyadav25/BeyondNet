@@ -231,6 +231,29 @@ class BankServiceTest {
   }
 
   @Test
+  void zeroBalanceAccountGetsSignedInsufficientFundsReceiptWithoutLedgerMutation() {
+    String account = "empty@beyondnet", device = UUID.randomUUID().toString();
+    byte[] sign = random(32), box = random(32);
+    bank.signup(map("account", account, "password", password, "name", "Empty", "role", "customer"));
+    bank.configurePin(account, map("pin", "123456", "password", password));
+    enroll(account, device, sign, box);
+    Map<String, Object> request = body(1000);
+    request.put("sender", account);
+    request.put("device_id", device);
+    Map<String, Object> packet = wrap(request, sign);
+    long before = db.read(c -> scalar(c, "SELECT COUNT(*) FROM ledger"));
+    Map<String, Object> result = bank.ingest(packet);
+    Map<String, Object> receiptPacket = BankService.object(((List<?>) result.get("receipts")).getFirst());
+    Map<String, Object> receipt = verify((String) bank.trust.get("sign_key"), openBox(box, BankService.object(receiptPacket.get("box"))));
+    assertEquals("rejected", receipt.get("status"));
+    assertEquals("Insufficient demo balance", receipt.get("reason"));
+    assertEquals(0, balance(account));
+    assertEquals(0, balance(merchant));
+    assertEquals(before, db.<Long>read(c -> scalar(c, "SELECT COUNT(*) FROM ledger")).longValue());
+    assertEquals(json(result.get("receipts")), json(bank.ingest(packet).get("receipts")));
+  }
+
+  @Test
   void tamperingCannotMutateBalances() {
     Map<String, Object> p = wrap(body(1000));
     p.put("expires_at", now() + 1000);

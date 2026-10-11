@@ -1,8 +1,8 @@
-# Background relay and offline chains — BeyondNet 1.3.0
+# Background relay and offline chains — BeyondNet 1.3.2
 
 ## Phone setup
 
-Install `installers/BeyondNet-Android-1.3.0.apk` over the existing app on every relay phone. Do not uninstall or clear data: enrollment keys, receipts and unresolved requests are retained. Bank API, URL, trust fingerprint and PostgreSQL are unchanged; this update requires no bank restart.
+Install `installers/BeyondNet-Android-1.3.2.apk` over the existing app on every relay phone. Do not uninstall or clear data: enrollment keys, receipts and unresolved requests are retained. Bank API, URL, trust fingerprint and PostgreSQL are unchanged; this update requires no bank restart.
 
 Enroll online once, then enable **Nearby relay** while BeyondNet is visible. Grant Nearby devices on Android 12+, or Location while using the app with Location on for Android 10–11. Android 13+ asks for notification permission; denying it does not block the service, but Android may show its Stop control only in active-apps controls. Confirm the relay notification, then leave the app or lock the screen. Offline relays need Bluetooth, supported BLE advertising and valid enrollment. Only the gateway needs internet access to the bank.
 
@@ -11,6 +11,8 @@ Stop from the app switch or notification's **Stop relay**. Bluetooth off pauses 
 Active relay consumes battery: discovery/advertising stay active, and a timed partial wake-lock lease keeps scheduling/transfer work running with a locked screen. It does not keep the screen awake. The lease refreshes while the service is healthy, expires if maintenance stalls and is released on pause/stop. This release prioritizes demo delivery over all-day power efficiency. No guarantee of execution after OS/user termination is claimed.
 
 ## Implementation
+
+Version 1.3.2 handles Android refusing GATT service registration: it checks BLE advertising support, reopens the plugin's GATT server and retries registration up to three times. Failed starts clean listeners and stop the foreground service rather than leaving the toggle active. `android_ble_session.dart` uses the pinned Android plugin 6.2.1's Pigeon void lifecycle channels; native contract tests verify their actual bindings and standard-codec replies. Bank connectivity, demo balance and payment PIN do not gate relaying. Hardware/firmware can still refuse startup; the app gives an actionable Bluetooth/permissions message instead of a native stack trace.
 
 `RelayEngineHost.kt` owns one application-scoped Flutter engine. `MainActivity` attaches a screen to it without creating another queue or destroying it on screen removal. `RelayService.kt` is a user-visible `connectedDevice` foreground service (also `location` on Android 10–11), with `stopWithTask=false`, persistent opt-in, sticky restart support and a Stop notification. There is no boot receiver or hidden startup. Dart initializes eagerly without a Flutter view, restoring keys/queues and replaying receipts. Background work never prompts for permissions or authorizes new payments.
 
@@ -34,12 +36,14 @@ The bank is outside the radio chain. It needs an internet endpoint, not Bluetoot
 2. Exchange signed packet inventories. New inventories include IDs, kind and hop counts; old ID-only v1 inventories remain supported.
 3. Transfer missing packets and strictly shorter routes. Persist and validate the whole packet before a custody ACK. A signed inventory repairs an ACK lost after storage. A successful BLE write alone is not custody or payment success.
 4. Prefer recently observed online gateways. Limit each packet/node to three acknowledged offline custodians during a 90-second window; online gateways and known receipt return-path peers are exempt. Expiring the window permits alternate neighbours after custodians disappear. This bounds fanout per node, not copies across the entire network.
-5. Skip previously visited devices. Payment `path` is its request history; an optional `trail` tracks each packet's own traversal so receipts can retrace the payment path without cycling around their own route. Routing changes do not change immutable ciphertext/packet ID. Old relays do not implement the new trail rules, so install 1.3.0 throughout a test chain.
+5. Skip previously visited devices. Payment `path` is its request history; an optional `trail` tracks each packet's own traversal so receipts can retrace the payment path without cycling around their own route. Routing changes do not change immutable ciphertext/packet ID. Old relays do not implement the new trail rules, so install 1.3.2 throughout a test chain.
 6. Keep sender copies, persist custody, and deduplicate immutable IDs. A strictly shorter route replaces routing metadata without resetting upload state. Multiple gateways may submit duplicates; the bank's existing ID/hash check and atomic transaction still produce one financial result.
 7. Interleave receipt/payment queues, prefer return-path receipts and earlier expiry, limit eight transfers per direction/contact, rotate neighbours and use randomized retry backoff. Fanout-blocked entries do not consume the transfer budget.
 8. Submit through WSS/HTTPS and persist returned receipts before marking upload complete. Return receipts through the preferred reverse path or alternate available routes. Only a verified, decryptable bank receipt updates financial outcome/balance.
 
 The four-transfer limit and signed **600-second authorization** remain. Forwarding never renews expiry. Expired unprocessed requests cannot settle; already committed payments stay paid and their receipts have longer retention. No usable chain within the window means no unprocessed settlement; an absent receipt means recover the original outcome, not presume cancellation.
+
+For new payments, online preflight refreshes the bank balance; offline preflight uses the cached bank balance minus unresolved local requests. Zero/insufficient funds are refused before the PIN dialog or packet creation. Authorization is serialized and funds are checked again after device authentication. This is a conservative local estimate; other devices on the same account can change the bank balance, so the bank's atomic funds check remains authoritative. Expired unknown outcomes stay reserved until a bank decision. On reconnection a gateway queries the mailbox, then submits the unchanged expired ciphertext if no receipt exists: the bank returns either the original committed outcome or a signed expiry rejection, releasing the reservation without extending TTL. Cleanup preserves original ciphertext for unresolved owned requests past the seven-day relay retention period, so a later bank resolution remains possible.
 
 Routing hints are authenticated per hop, not a cryptographic proof of physical route history. A dishonest enrolled peer can lie about reachability or drop packets. It cannot use those hints to authorize money or forge bank receipts. The system remains a demo, not real UPI or independently audited financial software.
 

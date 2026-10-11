@@ -43,8 +43,16 @@ object RelayEngineHost {
         if (Build.VERSION.SDK_INT <= 30 &&
             !(context.getSystemService(Context.LOCATION_SERVICE) as LocationManager).isLocationEnabled)
             return "Turn Location on for Android 10–11 Bluetooth discovery."
-        val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
-        return if (adapter?.isEnabled == true) null else "Turn Bluetooth on to resume relaying."
+        return try {
+            val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+            if (adapter?.isEnabled != true) "Turn Bluetooth on to resume relaying."
+            else if (!context.packageManager.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE) ||
+                !adapter.isMultipleAdvertisementSupported || adapter.bluetoothLeAdvertiser == null)
+                "This phone does not support Bluetooth LE relaying. Online payments remain available."
+            else null
+        } catch (_: SecurityException) {
+            "Bluetooth permissions changed. Open BeyondNet and allow Nearby devices."
+        }
     }
 
     fun get(context: Context): FlutterEngine {

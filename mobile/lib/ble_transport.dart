@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:bluetooth_low_energy/bluetooth_low_energy.dart';
 
 import 'protocol.dart';
+import 'android_ble_session.dart';
 
 // Small ATT-safe frames: one flag byte + <=19 bytes, never a long GATT read.
 // Bit 0 starts a message; bit 1 ends it. Empty [0] means response pending.
@@ -70,8 +72,9 @@ abstract interface class PeerTransport {
 }
 
 class BleTransport implements PeerTransport {
-  final CentralManager central = CentralManager();
-  final PeripheralManager peripheral = PeripheralManager();
+  final CentralManager central;
+  final PeripheralManager peripheral;
+  final AndroidBleSession? androidSession;
   @override
   final Map<String, PeerRadio> discovered = {};
   final Map<String, Assembly> incoming = {};
@@ -84,7 +87,16 @@ class BleTransport implements PeerTransport {
   @override
   bool running = false;
   Timer? cleanup;
-  BleTransport(this.handler, this.onEvent);
+  BleTransport(
+    this.handler,
+    this.onEvent, {
+    CentralManager? central,
+    PeripheralManager? peripheral,
+    AndroidBleSession? androidSession,
+  }) : central = central ?? CentralManager(),
+       peripheral = peripheral ?? PeripheralManager(),
+       androidSession =
+           androidSession ?? (Platform.isAndroid ? AndroidBleSession() : null);
   @override
   Future<void> start() async {
     if (running) return;
@@ -93,6 +105,12 @@ class BleTransport implements PeerTransport {
     while ((central.state != BluetoothLowEnergyState.poweredOn ||
             peripheral.state != BluetoothLowEnergyState.poweredOn) &&
         DateTime.now().isBefore(deadline)) {
+      if (central.state == BluetoothLowEnergyState.unsupported ||
+          peripheral.state == BluetoothLowEnergyState.unsupported) {
+        throw StateError(
+          'This phone does not support Bluetooth LE relaying. Online payments remain available.',
+        );
+      }
       await Future<void>.delayed(const Duration(milliseconds: 150));
     }
     if (central.state != BluetoothLowEnergyState.poweredOn ||
@@ -177,16 +195,39 @@ class BleTransport implements PeerTransport {
       ],
       descriptors: [],
     );
-    await peripheral.removeAllServices();
-    await peripheral.addService(
-      GATTService(
-        uuid: serviceId,
-        isPrimary: true,
-        includedServices: [],
-        characteristics: [characteristic],
-      ),
-    );
     try {
+      // Android may retain a closed/busy GATT server after a failed start or
+      // adapter restart. Open a fresh session and retry bounded registration.
+      // Cleanup covers registration too, not only advertising/discovery.
+      for (var attempt = 0; attempt < 3; attempt++) {
+        try {
+          await androidSession?.reopen();
+          await peripheral.removeAllServices();
+          await peripheral
+              .addService(
+                GATTService(
+                  uuid: serviceId,
+                  isPrimary: true,
+                  includedServices: [],
+                  characteristics: [characteristic],
+                ),
+              )
+              .timeout(const Duration(seconds: 8));
+          break;
+        } catch (_) {
+          if (attempt == 2) {
+            throw StateError(
+              'This phone could not start its Bluetooth relay service. '
+              'Turn Bluetooth off and on, then try again. '
+              'Online payments remain available; relaying does not require a payment PIN or an online bank.',
+            );
+          }
+          await androidSession?.close();
+          await Future<void>.delayed(
+            Duration(milliseconds: 350 * (attempt + 1)),
+          );
+        }
+      }
       await peripheral.startAdvertising(
         Advertisement(name: 'BeyondNet', serviceUUIDs: [serviceId]),
       );
@@ -206,8 +247,15 @@ class BleTransport implements PeerTransport {
         );
       });
       onEvent('Nearby Bluetooth relay started.');
-    } catch (_) {
+    } catch (error) {
       await stop();
+      if (error is! StateError) {
+        throw StateError(
+          'Bluetooth relay could not start. Check Nearby devices permissions '
+          'and turn Bluetooth off and on before trying again. '
+          'The bank and payment PIN do not control Bluetooth startup.',
+        );
+      }
       rethrow;
     }
   }
@@ -278,6 +326,7 @@ class BleTransport implements PeerTransport {
     try {
       await peripheral.stopAdvertising();
     } catch (_) {}
+    await androidSession?.close();
     for (final s in subscriptions) {
       await s.cancel();
     }

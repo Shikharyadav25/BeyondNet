@@ -1,8 +1,36 @@
-# Validation and source audit — 10 October 2026
+# Validation and source audit — updated 11 October 2026
 
-Current phone release: **1.3.0+7**, Android 10+. Current backend: Java 21+ / Spring Boot 4.1.1 / PostgreSQL. Maven artifact remains `bank-1.2.0.jar`.
+Current phone release: **1.3.2+9**, Android 10+. Current backend: Java 21+ / Spring Boot 4.1.1 / PostgreSQL. Maven artifact remains `bank-1.2.0.jar`.
 
-## Background relay and reliability checks
+## Funds and Bluetooth startup fixes — release 1.3.2
+
+The running bank's recent ₹10 rejection was read without modifying records: its reason was **Insufficient demo balance**. Bank funds enforcement was already present. The mobile app lacked preflight checks, so it could queue an unaffordable request and label it pending before receiving the bank rejection.
+
+The screenshot's R8 map ID matches the retained 1.3.1 release mapping. Frame `es0.l:1273` resolves to `PeripheralManagerImpl.addService:183`: Android's GATT registration returned false. This is independent of bank connectivity and payment PIN setup.
+
+Release 1.3.2 adds online balance refresh/offline cached-funds preflight, unresolved-request reservations, serialized authorization and a second funds check after device authentication. The UI warns before the PIN dialog, displays available funds and highlights the bank's signed rejection reason. Expired unknown requests retain their reservation until a bank result; online recovery resubmits the original expired ciphertext only if mailbox recovery finds no receipt, producing either the original paid outcome or a signed expiry rejection without renewing TTL.
+
+Bluetooth startup checks BLE advertising support, opens a fresh GATT session, retries registration up to three times and cleans listeners/server/service state after failure. Device errors use readable messages rather than raw native stack traces. The compatibility adapter pins Android plugin 6.2.1; tests execute its actual generated host bindings.
+
+| Check | Result |
+|---|---|
+| Flutter analyzer | No issues |
+| Flutter non-integration suite | **74 passed** |
+| Native Android tests, API 29/34 | **20 passed**: service/readiness 12, startup SQLite 4, real plugin channel contract 4 |
+| Java/Neon financial tests | **3 passed**: zero-balance signed rejection with unchanged ledger, duplicate gateways, overspending race |
+| Actual Dart/Java/Neon integration | **1 passed**, including multi-hop/duplicate gateways and signed expiry resolution releasing reserved funds |
+
+**98 automated tests passed for this release.** Flutter faults include zero funds without biometric authorization or packet creation, stale online snapshots in both directions, pending/expired reservations, concurrent authorizations, changed funds after authentication, retention of unresolved original ciphertext past relay cleanup, refused GATT registration/retry/cleanup, readable dialogs and prominent rejection reasons. Tests use temporary identities and isolated PostgreSQL schemas. Production bank code, private keys and records are unchanged. No phone was connected; manufacturer-specific BLE registration and background delivery remain physical acceptance checks.
+
+## Earlier Android startup fix — release 1.3.1
+
+A physical phone reported `Queries can be performed using SQLiteDatabase query or rawQuery methods only` for `PRAGMA busy_timeout=5000`. Release 1.3.0 incorrectly sent this row-producing PRAGMA through `execute`; the desktop SQLite test adapter accepted it and the prior service tests did not exercise native database configuration. Consequently the earlier 77-test pass did not establish successful Android database startup.
+
+Release 1.3.1 sends that setting through `rawQuery`, preserving the 5-second lock timeout, FULL synchronous durability, schema version 2 and existing queue/history. It does not delete or reset data. Version code 8 and the existing application ID/signing certificate allow an in-place update. Install over 1.3.0 or the prior compatible release; do not uninstall or clear storage.
+
+Flutter analyzer: **no issues**. Flutter non-integration suite: **60 passed**. New native SQLite regression: **4 passed** on API 29/34. This test reads the actual production startup SQL/methods and executes them through the real Android sqflite adapter with Robolectric native SQLite. It reproduces the original `execute` failure, checks corrected settings, and verifies preserved data after closing/reopening. No phones were connected for an APK installation test. The bank and wire protocol are unchanged; the live bank tests below were not repeated for this SQL dispatch-only fix.
+
+## Background relay and reliability checks — release 1.3.0
 
 | Check | Result |
 |---|---|
@@ -45,9 +73,9 @@ Covered behavior includes canonical wire/signature interoperability, immediate p
 
 ## Android artifact
 
-`installers/BeyondNet-Android-1.3.0.apk` is the current release; `BeyondNet-Android.apk` is an alias. Install the new APK over the existing app on every phone in the test chain. Do not uninstall or clear app data. The prior 1.2.1 APK is retained for reference. Bank URL, fingerprint, API and stored ledger are unchanged; no backend restart is needed for this update.
+`installers/BeyondNet-Android-1.3.2.apk` is the current release; `BeyondNet-Android.apk` is an alias. Install the new APK over the existing app on every phone in the test chain. Do not uninstall or clear app data. The prior APKs are retained for reference; 1.3.0 has the startup defect described above. Bank URL, fingerprint, API and stored ledger are unchanged; no backend restart is needed for this update.
 
-Current APK SHA-256: `d192be52ff0fc5dc4c2d764f83aaa5c147dd23af8c4ac17174c6c8226cabbf5b`, also recorded in `installers/SHA256SUMS.txt`. APK signature verification and packaged version/service/permission checks passed; the certificate matches the previous release for in-place updates. Previous 1.2.1 SHA-256: `a73f813741f08587f4b21b3cce63c731c827205027981e6cd4516e014b9952de`.
+Current APK SHA-256: `ee1aacf0f11598ea576502ec84979c89890f0a46f614be84f9c9d2a62d53e084`, also recorded in `installers/SHA256SUMS.txt`. Release build, APK signature verification and packaged version-code/minimum-SDK checks passed; certificate matches previous releases. Previous 1.3.1 SHA-256: `7951edbe36686d7be322d0ff18919421bef37e2b50036dbc6fa942fa81ac47ca`. Previous 1.3.0 SHA-256: `d192be52ff0fc5dc4c2d764f83aaa5c147dd23af8c4ac17174c6c8226cabbf5b`. Previous 1.2.1 SHA-256: `a73f813741f08587f4b21b3cce63c731c827205027981e6cd4516e014b9952de`.
 
 API minimum 29, target 36, compile 37. Existing signing certificate SHA-256: `87631ca5716266c5e82f64acff27185b6b1d84bd126128546545847427a07ff2`. Distribution uses a development signing certificate; source ZIP does not contain its secret key.
 

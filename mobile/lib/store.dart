@@ -13,7 +13,9 @@ class LocalStore {
       path,
       version: 2,
       onConfigure: (db) async {
-        await db.execute('PRAGMA busy_timeout=5000');
+        // This assignment returns a row. Android's execSQL rejects statements
+        // with results, so use the query path even though it sets a value.
+        await db.rawQuery('PRAGMA busy_timeout=5000');
         await db.execute('PRAGMA synchronous=FULL');
       },
       onUpgrade: (db, old, _) async {
@@ -225,11 +227,25 @@ class LocalStore {
   }, conflictAlgorithm: ConflictAlgorithm.replace);
   Future<void> cleanup() async {
     await db.delete('relay_acks', where: 'expiry<=?', whereArgs: [nowSeconds]);
-    // Preserve expired owned payment intents and receipts. Their financial outcome remains unknown until verified.
-    await db.delete(
-      'packets',
-      where: 'expiry<?',
-      whereArgs: [nowSeconds - 7 * 86400],
-    );
+    // Keep original ciphertext for unresolved owned requests, even beyond
+    // relay retention, so the bank can later return a definitive expiry result
+    // or recover a prior commit and release its local funds reservation.
+    final unresolved = (await payments())
+        .where((p) => !['paid', 'rejected'].contains(p['state']))
+        .map((p) => p['packet_id'])
+        .toSet();
+    await db.transaction((tx) async {
+      final old = await tx.query(
+        'packets',
+        columns: ['id'],
+        where: 'expiry<?',
+        whereArgs: [nowSeconds - 7 * 86400],
+      );
+      for (final row in old) {
+        if (!unresolved.contains(row['id'])) {
+          await tx.delete('packets', where: 'id=?', whereArgs: [row['id']]);
+        }
+      }
+    });
   }
 }

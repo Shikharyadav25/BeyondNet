@@ -8,6 +8,7 @@ mobile/.dart_tool/
 mobile/build/
 mobile/.flutter-plugins-dependencies
 mobile/android/.gradle/
+mobile/android/.kotlin/
 mobile/android/local.properties
 mobile/ios/Pods/
 mobile/ios/.symlinks/

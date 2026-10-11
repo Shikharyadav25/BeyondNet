@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:uuid/uuid.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
@@ -239,6 +240,62 @@ void main() {
         expect(sender.account!['balance'], 87505); // only one debit
         expect(sender.bankReachable, isFalse);
         expect(intermediate.bankReachable, isFalse);
+
+        // An expired unresolved request keeps funds reserved offline. On
+        // reconnection, the ORIGINAL ciphertext gets a signed bank decision,
+        // releasing its reservation without ever extending authorization.
+        final expiredId = const Uuid().v4();
+        final deadline = nowSeconds - 1;
+        final expiredBody = {
+          'v': 2,
+          'pin': '123456',
+          'payment_id': expiredId,
+          'sender': sender.accountId,
+          'recipient': merchant.accountId,
+          'amount': 100,
+          'currency': 'INR',
+          'device_id': sender.deviceId,
+          'created_at': deadline - 600,
+          'expires_at': deadline,
+          'sender_mailbox': randomCapability(),
+          'recipient_mailbox': randomCapability(),
+        };
+        final expiredPacket = await makePacket(
+          'payment',
+          await seal(
+            sender.trust['box_key'],
+            await sign(sender.signing, expiredBody),
+          ),
+          expiredBody['sender_mailbox'] as String,
+          deadline,
+        );
+        await sender.store.createPayment(expiredPacket, {
+          for (final entry in expiredBody.entries)
+            if (entry.key != 'pin') entry.key: entry.value,
+          'packet_id': expiredPacket['id'],
+          'state': 'queued',
+          'transport': 'Saved on this phone',
+        });
+        await sender.reload();
+        expect(sender.availableBalance, 87405);
+        sender.bankReachable = true;
+        sender.nextBankAttempt = DateTime.fromMillisecondsSinceEpoch(0);
+        await sender.gatewayTick();
+        await sender.reload();
+        final expired = sender.payments.firstWhere(
+          (p) => p['payment_id'] == expiredId,
+        );
+        expect(expired['state'], 'rejected');
+        expect(
+          expired['receipt']['reason'],
+          'Authorization expired before bank submission',
+        );
+        expect(sender.account!['balance'], 87505);
+        expect(sender.availableBalance, 87505);
+        expect(
+          (await sender.store.packet(expiredPacket['id']))!['expires_at'],
+          deadline,
+        );
       } finally {
         for (final e in nodes) {
           e.timer?.cancel();

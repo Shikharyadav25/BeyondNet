@@ -1,5 +1,17 @@
 # Troubleshooting
 
+## Zero balance or bank rejection
+
+APK 1.3.2 checks available demo funds before the PIN prompt. Online it refreshes the bank snapshot; offline it subtracts unresolved payments from the last confirmed balance. Add demo money while online. A bank rejection shows its signed reason prominently; a request previously showing “On its way” was pending, not paid. The bank already refused insufficient funds in older APKs. Pending/expired unknown requests remain reserved until their original bank result is recovered; expiry by itself does not prove that no earlier submission settled.
+
+## Nearby relay refuses to start
+
+The reported 1.3.1 native `IllegalStateException` resolves to Android's GATT `addService` returning false. It is a Bluetooth registration failure, not a missing payment PIN or an offline bank. APK 1.3.2 reopens the Bluetooth service, retries registration and cleans failed attempts. Grant Nearby devices (Android 12+) or Location with Location on (Android 10–11), and keep Bluetooth on. If startup still fails, turn Bluetooth off/on and retry. Phones without BLE advertising cannot act as relays; online payment remains available. Device testing is still needed to verify each manufacturer's Bluetooth stack.
+
+## App startup: PRAGMA busy_timeout error
+
+If the setup screen says `Queries can be performed using SQLiteDatabase query or rawQuery methods only` for `PRAGMA busy_timeout=5000`, install APK **1.3.2** over the existing app. This was an Android database-call defect in 1.3.0, not a storage-space or bank URL problem. Do not uninstall or clear data: the fix reopens the existing database and preserves enrollment and payment history. The bank requires no change or restart.
+
 | Symptom | Check / action |
 |---|---|
 | Bank console will not open | Start the bank process, check port 8080, and inspect the launch terminal. The operator key is in that bank’s `data/admin-token.txt`. |
@@ -50,7 +62,7 @@ Then rerun `flutter build apk --release`. Build success must be confirmed before
 
 ## New signup and live updates
 
-Use the current Java bank with APK 1.3.0. A 404 on signup/top-up usually means an older bank process is running. IDs must use `3-to-32-characters@beyondnet`; existing IDs sign in as before. A duplicate signup after an interrupted enrollment can be completed through Sign in. New accounts need Add demo money before spending.
+Use the current Java bank with APK 1.3.2. A 404 on signup/top-up usually means an older bank process is running. IDs must use `3-to-32-characters@beyondnet`; existing IDs sign in as before. A duplicate signup after an interrupted enrollment can be completed through Sign in. New accounts need Add demo money before spending.
 
 If WSS is blocked by a proxy, HTTPS recovery still works; allow WebSocket upgrades for live status. Internet is off means Android reports no validated internet route. Cannot reach the bank can instead mean a stopped bank, paused service, expired login, stale tunnel URL or trust mismatch. Offline payments still need a verified nearby peer; they cannot settle until a gateway reaches the bank.
 

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -21,10 +22,11 @@ void main() {
     String id,
     String account, {
     http.Client? client,
+    Future<bool> Function()? authorize,
   }) async {
     final e = BeyondNetEngine(
       client: client,
-      authorizePayment: () async => true,
+      authorizePayment: authorize ?? () async => true,
     );
     await e.store.init(databasePath: '${directory.path}/$id.sqlite3');
     e.signing = await ed.newKeyPair();
@@ -113,6 +115,222 @@ void main() {
     expect(await sender.store.payments(), isEmpty);
   });
 
+  void paymentReady(BeyondNetEngine e, {int balance = 100000}) {
+    e.profile!['account']['pin_configured'] = true;
+    e.profile!['account']['balance'] = balance;
+    e.profile!['trust']['box_key'] = fixture['box_public'];
+    e.connectedPeer = relay.deviceId;
+    e.nearby = [
+      {'device_id': relay.deviceId, 'at': nowSeconds},
+    ];
+    e.bankReachable = false;
+  }
+
+  Future<void> settleTick(BeyondNetEngine e) async {
+    while (e.working) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+  }
+
+  test(
+    'Zero funds are blocked before native authorization or packet creation',
+    () async {
+      var authorizations = 0;
+      final e = await node(
+        'zero',
+        'zero@beyondnet',
+        authorize: () async {
+          authorizations++;
+          return true;
+        },
+      );
+      try {
+        paymentReady(e, balance: 0);
+        await expectLater(
+          e.pay(relay.certificate, 1000, pin: '123456'),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              contains('Insufficient demo balance'),
+            ),
+          ),
+        );
+        expect(authorizations, 0);
+        expect(await e.store.packets(), isEmpty);
+        expect(await e.store.payments(), isEmpty);
+      } finally {
+        e.dispose();
+        await e.store.db.close();
+      }
+    },
+  );
+
+  test(
+    'Unresolved requests reserve funds and bank rejection releases the reservation',
+    () async {
+      paymentReady(sender, balance: 1000);
+      final first = await sender.pay(relay.certificate, 800, pin: '123456');
+      await settleTick(sender);
+      expect(sender.availableBalance, 200);
+      await expectLater(
+        sender.pay(relay.certificate, 300, pin: '123456'),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('pending payments'),
+          ),
+        ),
+      );
+      var intent = (await sender.store.payments()).single;
+      expect(intent['payment_id'], first);
+      // Expiry without a receipt is not proof the bank never committed it.
+      await sender.store.putPayment({...intent, 'expires_at': nowSeconds - 1});
+      await expectLater(sender.preparePayment(300), throwsStateError);
+      await sender.store.putPayment({...intent, 'state': 'rejected'});
+      await sender.reload();
+      expect(sender.availableBalance, 1000);
+      await sender.pay(relay.certificate, 300, pin: '123456');
+      await settleTick(sender);
+      expect((await sender.store.payments()).length, 2);
+    },
+  );
+
+  test(
+    'Online preflight refreshes a stale positive balance and refuses zero bank funds',
+    () async {
+      var reads = 0;
+      final e = await node(
+        'fresh',
+        'fresh@beyondnet',
+        client: MockClient((r) async {
+          expect(r.url.path, '/api/me');
+          reads++;
+          return http.Response(
+            jsonEncode({
+              'account': {
+                'id': 'fresh@beyondnet',
+                'balance': 0,
+                'revision': 1,
+                'pin_configured': true,
+              },
+              'merchants': [],
+            }),
+            200,
+          );
+        }),
+      );
+      try {
+        paymentReady(e);
+        e.profile!['bank_url'] = 'https://test.bank';
+        e.bankReachable = true;
+        await expectLater(
+          e.pay(relay.certificate, 1000, pin: '123456'),
+          throwsStateError,
+        );
+        expect(reads, 1);
+        expect(e.availableBalance, 0);
+        expect(await e.store.payments(), isEmpty);
+      } finally {
+        e.dispose();
+        await e.store.db.close();
+      }
+    },
+  );
+
+  test(
+    'Online preflight allows new bank funds despite stale zero cached balance',
+    () async {
+      final e = await node(
+        'funded',
+        'funded@beyondnet',
+        client: MockClient(
+          (r) async => http.Response(
+            jsonEncode({
+              'account': {
+                'id': 'funded@beyondnet',
+                'balance': 1000,
+                'revision': 1,
+                'pin_configured': true,
+              },
+              'merchants': [],
+            }),
+            200,
+          ),
+        ),
+      );
+      try {
+        paymentReady(e, balance: 0);
+        e.profile!['bank_url'] = 'https://test.bank';
+        e.bankReachable = true;
+        await e.preparePayment(1000);
+        expect(e.availableBalance, 1000);
+      } finally {
+        e.dispose();
+        await e.store.db.close();
+      }
+    },
+  );
+
+  test(
+    'Concurrent requests cannot reserve the same local funds twice',
+    () async {
+      final authorizing = Completer<void>(), authorize = Completer<bool>();
+      final e = await node(
+        'racing',
+        'racing@beyondnet',
+        authorize: () {
+          authorizing.complete();
+          return authorize.future;
+        },
+      );
+      try {
+        paymentReady(e, balance: 1000);
+        final first = e.pay(relay.certificate, 800, pin: '123456');
+        await authorizing.future;
+        await expectLater(
+          e.pay(relay.certificate, 800, pin: '123456'),
+          throwsStateError,
+        );
+        authorize.complete(true);
+        await first;
+        await settleTick(e);
+        expect((await e.store.payments()).length, 1);
+        expect(e.availableBalance, 200);
+      } finally {
+        e.dispose();
+        await e.store.db.close();
+      }
+    },
+  );
+
+  test(
+    'Funds are rechecked after device authorization changes the snapshot',
+    () async {
+      late BeyondNetEngine e;
+      e = await node(
+        'changed',
+        'changed@beyondnet',
+        authorize: () async {
+          e.profile!['account']['balance'] = 0;
+          return true;
+        },
+      );
+      try {
+        paymentReady(e, balance: 1000);
+        await expectLater(
+          e.pay(relay.certificate, 800, pin: '123456'),
+          throwsStateError,
+        );
+        expect(await e.store.payments(), isEmpty);
+      } finally {
+        e.dispose();
+        await e.store.db.close();
+      }
+    },
+  );
+
   test(
     'Real engine authenticates peer command and ACKs only persisted packet',
     () async {
@@ -166,6 +384,38 @@ void main() {
         databasePath: '${directory.path}/relay-device.sqlite3',
       );
       expect((await relay.store.packet(p['id']))!['id'], p['id']);
+    },
+  );
+  test(
+    'Cleanup retains unresolved owned ciphertext until a definitive bank result',
+    () async {
+      final original = await makePacket(
+        'payment',
+        Map<String, dynamic>.from(fixture['box']),
+        randomCapability(),
+        nowSeconds - 8 * 86400,
+      );
+      final relayOnly = await makePacket(
+        'payment',
+        Map<String, dynamic>.from(fixture['box']),
+        randomCapability(),
+        nowSeconds - 8 * 86400,
+      );
+      final intent = {
+        'payment_id': 'old-owned',
+        'sender': sender.accountId,
+        'amount': 100,
+        'packet_id': original['id'],
+        'state': 'queued',
+      };
+      await sender.store.createPayment(original, intent);
+      await sender.store.putPacket(relayOnly);
+      await sender.store.cleanup();
+      expect(await sender.store.packet(original['id']), isNotNull);
+      expect(await sender.store.packet(relayOnly['id']), isNull);
+      await sender.store.putPayment({...intent, 'state': 'rejected'});
+      await sender.store.cleanup();
+      expect(await sender.store.packet(original['id']), isNull);
     },
   );
   test(

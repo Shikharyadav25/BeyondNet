@@ -1,6 +1,6 @@
 # Your first BeyondNet payment (Android)
 
-Use the **1.3.0 APK** with the Java/PostgreSQL bank. Install over the existing app to retain keys/history. See [background relay and controlled three-phone acceptance](BACKGROUND_RELAY.md); the existing bank identity needs no update.
+Use the **1.3.2 APK** with the Java/PostgreSQL bank. Install over the existing app to retain keys/history. See [background relay and controlled three-phone acceptance](BACKGROUND_RELAY.md); the existing bank identity needs no update.
 
 ## 1. Laptop
 
@@ -55,4 +55,4 @@ Record actual phone models, OS versions, payment ID, bank reference, connectivit
 
 ## APK compatibility
 
-Use 1.3.0 throughout the chain for the stronger routing and background service. Versions 1.2.0/1.2.1 retain compatible PIN-authorized payment envelopes but lack the new background/path-trail behaviour. Old PIN-less new authorizations are rejected; completed old payments remain recoverable.
+Use 1.3.2 throughout the chain for the stronger routing and background service. Versions 1.2.0/1.2.1 retain compatible PIN-authorized payment envelopes but lack the new background/path-trail behaviour. Old PIN-less new authorizations are rejected; completed old payments remain recoverable.

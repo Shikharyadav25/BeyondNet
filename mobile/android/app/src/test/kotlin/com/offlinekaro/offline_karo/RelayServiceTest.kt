@@ -8,6 +8,7 @@ import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothAdapter
 import android.location.LocationManager
 import android.content.Context
+import android.content.pm.PackageManager
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -41,6 +42,8 @@ class RelayServiceTest {
             Manifest.permission.BLUETOOTH_ADVERTISE)
         val adapter = (app.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
         shadowOf(adapter).setState(BluetoothAdapter.STATE_ON)
+        shadowOf(adapter).setIsMultipleAdvertisementSupported(true)
+        shadowOf(app.packageManager).setSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE, true)
         shadowOf(app.getSystemService(Context.LOCATION_SERVICE) as LocationManager).setLocationEnabled(true)
     }
     @After fun cleanup() {
@@ -114,5 +117,12 @@ class RelayServiceTest {
         shadowOf(android.os.Looper.getMainLooper()).idle()
         assertTrue(ShadowPowerManager.getLatestWakeLock().isHeld)
         controller.destroy()
+    }
+
+    @Test fun unsupportedAdvertisingShowsActionableReadinessMessage() {
+        val adapter = (app.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        shadowOf(adapter).setIsMultipleAdvertisementSupported(false)
+        assertTrue(RelayEngineHost.readiness(app)!!.contains("does not support"))
+        assertFalse(RelayService.running)
     }
 }

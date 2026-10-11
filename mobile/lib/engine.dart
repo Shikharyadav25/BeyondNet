@@ -64,11 +64,50 @@ class BeyondNetEngine extends ChangeNotifier {
   bool relayEnabled = false, backgroundActive = false;
   String? relayBlocked;
   bool _relayTransition = false;
+  bool _authorizingPayment = false;
   String network = 'Checking connection…';
   bool? internet;
   bool bankReachable = false, checkingConnection = false;
   bool get isMerchant => account?['role'] == 'merchant';
   bool get pinConfigured => account?['pin_configured'] == true;
+  int get availableBalance => _availableBalance(payments);
+
+  int _availableBalance(List<Json> intents) {
+    final reserved = intents
+        .where(
+          (p) =>
+              p['sender'] == accountId &&
+              !['paid', 'rejected'].contains(p['state']),
+        )
+        .fold<int>(0, (sum, p) => sum + (p['amount'] as int));
+    return ((account?['balance'] as num? ?? 0).toInt() - reserved).clamp(
+      0,
+      100000000,
+    );
+  }
+
+  Future<void> _ensurePaymentFunds(int amount) async {
+    final available = _availableBalance(await store.payments());
+    if (amount > available) {
+      final pending = (account!['balance'] as num).toInt() > available;
+      throw StateError(
+        'Insufficient demo balance. Available: ₹${(available / 100).toStringAsFixed(2)}. '
+        '${pending ? "Money reserved for pending payments is unavailable until their bank result is known. " : ""}'
+        'Add demo money online before paying.',
+      );
+    }
+  }
+
+  Future<void> preparePayment(int amount) async {
+    if (amount < 1 || amount > 1000000) {
+      throw ArgumentError('Enter ₹0.01 to ₹10,000.');
+    }
+    // Online uses a fresh authoritative snapshot. Offline uses the last bank
+    // snapshot less unresolved local intents; expiry alone never releases them.
+    if (bankReachable) await refreshProfile();
+    await _ensurePaymentFunds(amount);
+  }
+
   String? connectedPeer;
   bool get canPay =>
       bankReachable ||
@@ -659,6 +698,18 @@ class BeyondNetEngine extends ChangeNotifier {
   }
 
   Future<String> pay(Json recipient, int amount, {required String pin}) async {
+    if (_authorizingPayment) {
+      throw StateError('Another payment is being authorized. Please wait.');
+    }
+    _authorizingPayment = true;
+    try {
+      return await _pay(recipient, amount, pin: pin);
+    } finally {
+      _authorizingPayment = false;
+    }
+  }
+
+  Future<String> _pay(Json recipient, int amount, {required String pin}) async {
     if (!pinConfigured) {
       throw StateError('Set your payment PIN online before paying.');
     }
@@ -673,6 +724,7 @@ class BeyondNetEngine extends ChangeNotifier {
     if (amount < 1 || amount > 1000000) {
       throw ArgumentError('Enter ₹0.01 to ₹10,000');
     }
+    await preparePayment(amount);
     final beneficiary = await verify(trust['sign_key'], recipient);
     if (beneficiary['mesh_id'] != trust['mesh_id'] ||
         beneficiary['expires_at'] <= nowSeconds) {
@@ -699,6 +751,7 @@ class BeyondNetEngine extends ChangeNotifier {
     if (!authenticated) {
       throw StateError('Payment authorization was cancelled.');
     }
+    await _ensurePaymentFunds(amount);
     final id = const Uuid().v4();
     final createdAt = nowSeconds;
     final body = {
@@ -1277,6 +1330,19 @@ class BeyondNetEngine extends ChangeNotifier {
         final recovered = await request('/api/mailbox/${p['mailbox']}');
         for (final value in recovered['receipts']) {
           await accept(Map<String, dynamic>.from(value));
+        }
+        if ((recovered['receipts'] as List).isEmpty &&
+            p['expires_at'] <= nowSeconds) {
+          // Ask the bank to resolve the ORIGINAL expired authorization. A
+          // previous commit returns its original paid receipt; an unprocessed
+          // expiry returns a signed rejection. Never extend TTL or invent a
+          // local cancellation to release reserved funds.
+          final original = Map<String, dynamic>.from(p)..remove('uploaded');
+          final result = await submitPacket(original);
+          for (final value in result['receipts']) {
+            await accept(Map<String, dynamic>.from(value));
+          }
+          await store.uploaded(p['id']);
         }
       }
       // Resolve unknown outcomes even after local payment authorization expiry.

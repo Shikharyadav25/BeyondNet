@@ -2,11 +2,11 @@
 
 # Final APK and command guide
 
-Release: **BeyondNet 1.3.0, build 7**. Android **10 or newer**. Demo funds only; no real UPI/bank integration. See [background relay and three-phone acceptance](BACKGROUND_RELAY.md).
+Release: **BeyondNet 1.3.2, build 9**. Android **10 or newer**. Demo funds only; no real UPI/bank integration. See [background relay and three-phone acceptance](BACKGROUND_RELAY.md).
 
 ## 1. Install the APK
 
-Copy/download `installers/BeyondNet-Android-1.3.0.apk` onto each phone and allow installation from that source when Android asks. Install over the existing app; do not uninstall or clear data. Existing enrollment remains valid. Enable relay once while visible; its notification-backed service continues with the screen closed. Bank restart, URL and fingerprint changes are unnecessary for this update.
+Copy/download `installers/BeyondNet-Android-1.3.2.apk` onto each phone and allow installation from that source when Android asks. Install over the existing app; do not uninstall or clear data. Existing enrollment remains valid. Enable relay once while visible; its notification-backed service continues with the screen closed. Bank restart, URL and fingerprint changes are unnecessary for this update.
 
 Optional USB installation, with phones unlocked, USB debugging enabled and the laptop authorized:
 

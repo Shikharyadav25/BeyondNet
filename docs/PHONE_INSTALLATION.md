@@ -1,6 +1,6 @@
 # Android installation
 
-Use `installers/BeyondNet-Android-1.3.0.apk` (Android 10 or newer). `BeyondNet-Android.apk` is an alias to it. Install over the existing app to retain keys/history. Enabled relay now continues with the screen closed through an Android foreground service; see [setup and acceptance](BACKGROUND_RELAY.md).
+Use `installers/BeyondNet-Android-1.3.2.apk` (Android 10 or newer). `BeyondNet-Android.apk` is an alias to it. Install over the existing app to retain keys/history. Enabled relay now continues with the screen closed through an Android foreground service; see [setup and acceptance](BACKGROUND_RELAY.md).
 
 Install over the existing app to preserve device keys/history. Updates require the same application ID and signing certificate. Do not uninstall to solve an update failure if payments are unresolved. Android versions below 10 are unsupported. Some older phones lack BLE peripheral advertising even when the OS version is supported.
 

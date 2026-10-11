@@ -256,18 +256,25 @@ class Hint extends StatelessWidget {
   );
 }
 
+String userErrorMessage(Object error) {
+  if (error is PlatformException) {
+    if (error.code == 'relay' && error.message != null) return error.message!;
+    return 'This phone could not complete the device operation. '
+        'Check the app permissions and try again.';
+  }
+  return error.toString().replaceFirst(
+    RegExp(r'^(Bad state|Invalid argument\(s\)): '),
+    '',
+  );
+}
+
 Future<void> alert(BuildContext c, Object error) async {
   if (!c.mounted) return;
   await showDialog(
     context: c,
     builder: (c) => AlertDialog(
       title: const Text('Needs your attention'),
-      content: Text(
-        error.toString().replaceFirst(
-          RegExp(r'^(Bad state|Invalid argument\(s\)): '),
-          '',
-        ),
-      ),
+      content: SingleChildScrollView(child: Text(userErrorMessage(error))),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(c),
@@ -786,8 +793,8 @@ class _ShellState extends State<Shell> {
               ],
             ),
             const SizedBox(height: 9),
-            const Text(
-              'Pending payments may change your available balance.',
+            Text(
+              'Available for new payments: ${rupees(e.availableBalance)}. Pending payments are reserved.',
               style: TextStyle(fontSize: 10, color: Color(0xff8fb1a4)),
             ),
           ],
@@ -1727,6 +1734,8 @@ class _PayState extends State<PayPage> {
       if (value < 1 || value > 1000000) {
         throw ArgumentError('Enter ₹0.01 to ₹10,000.');
       }
+      await widget.engine.preparePayment(value);
+      if (!mounted) return;
       if (!widget.engine.pinConfigured) {
         throw StateError(
           'Open Settings and set your payment PIN while online first.',
@@ -1878,6 +1887,14 @@ class _PayState extends State<PayPage> {
           onPressed: busy || selected == null ? null : pay,
           child: Text(busy ? 'Authorizing…' : 'Review payment →'),
         ),
+        const SizedBox(height: 12),
+        ListenableBuilder(
+          listenable: widget.engine,
+          builder: (_, _) => Hint(
+            'Available for new payments: ${rupees(widget.engine.availableBalance)}. '
+            'Unresolved payments remain reserved until a bank receipt arrives.',
+          ),
+        ),
       ],
     ),
   );
@@ -1948,6 +1965,17 @@ class PaymentDetails extends StatelessWidget {
               textAlign: TextAlign.center,
               style: const TextStyle(color: muted),
             ),
+            if (rejected) ...[
+              const SizedBox(height: 16),
+              Text(
+                r?['reason'] ?? 'The bank rejected this payment.',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.red,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
             const SizedBox(height: 28),
             Box(
               child: Column(
