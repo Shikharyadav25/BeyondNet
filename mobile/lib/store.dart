@@ -11,7 +11,7 @@ class LocalStore {
         '${(await getApplicationSupportDirectory()).path}/offline-karo.sqlite3';
     db = await openDatabase(
       path,
-      version: 3,
+      version: 4,
       onConfigure: (db) async {
         // This assignment returns a row. Android's execSQL rejects statements
         // with results, so use the query path even though it sets a value.
@@ -23,6 +23,7 @@ class LocalStore {
         if (old < 3) {
           await db.execute('ALTER TABLE packets ADD COLUMN source TEXT');
         }
+        if (old < 4) await _createReplayTable(db);
       },
       onCreate: (db, _) async {
         await db.execute(
@@ -44,8 +45,68 @@ class LocalStore {
           'CREATE TABLE peers(id TEXT PRIMARY KEY, data TEXT NOT NULL)',
         );
         await _createRelayTables(db);
+        await _createReplayTable(db);
       },
     );
+  }
+
+  static Future<void> _createReplayTable(DatabaseExecutor db) async {
+    await db.execute(
+      'CREATE TABLE rpc_replays(peer TEXT NOT NULL, request TEXT NOT NULL, expiry INTEGER NOT NULL, PRIMARY KEY(peer,request))',
+    );
+    await db.execute('CREATE INDEX rpc_replays_expiry ON rpc_replays(expiry)');
+  }
+
+  /// Claim before executing a command. Persist through its entire signed clock
+  /// window, including future-dated requests. Never evict still-valid claims.
+  Future<void> claimRpc(String peer, String request, int at, {int? now}) async {
+    final clock = now ?? nowSeconds;
+    if (request.isEmpty || request.length > 80 || (at - clock).abs() > 120) {
+      throw StateError('Invalid or expired peer request');
+    }
+    await db.transaction((tx) async {
+      final watermark = await tx.query(
+        'config',
+        where: 'key=?',
+        whereArgs: ['rpc_clock_watermark'],
+      );
+      if (watermark.isNotEmpty &&
+          clock < int.parse(watermark.single['value'] as String)) {
+        throw StateError(
+          'Device clock moved backwards. Correct the time before relaying.',
+        );
+      }
+      await tx.delete('rpc_replays', where: 'expiry<?', whereArgs: [clock]);
+      if ((await tx.query(
+        'rpc_replays',
+        where: 'peer=? AND request=?',
+        whereArgs: [peer, request],
+      )).isNotEmpty) {
+        throw StateError('Replayed peer request');
+      }
+      final total = Sqflite.firstIntValue(
+        await tx.rawQuery('SELECT COUNT(*) FROM rpc_replays'),
+      )!;
+      final perPeer = Sqflite.firstIntValue(
+        await tx.rawQuery('SELECT COUNT(*) FROM rpc_replays WHERE peer=?', [
+          peer,
+        ]),
+      )!;
+      if (total >= 4096 || perPeer >= 256) {
+        throw StateError(
+          'Peer request limit. Retry after the replay window expires.',
+        );
+      }
+      await tx.insert('rpc_replays', {
+        'peer': peer,
+        'request': request,
+        'expiry': at + 120,
+      });
+      await tx.insert('config', {
+        'key': 'rpc_clock_watermark',
+        'value': '$clock',
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+    });
   }
 
   static Future<void> _createRelayTables(DatabaseExecutor db) => db.execute(

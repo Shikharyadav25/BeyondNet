@@ -66,6 +66,23 @@ void main() {
     await directory.delete(recursive: true);
   });
   test(
+    'authenticated command remains blocked after receiver database restart',
+    () async {
+      final wire = await sender.signedRpc({
+        'op': 'inventory',
+      }, 'restart-replay');
+      await relay.handleRpc(wire);
+      await relay.store.db.close();
+      await relay.store.init(
+        databasePath: '${directory.path}/relay-device.sqlite3',
+      );
+      await expectLater(relay.handleRpc(wire), throwsStateError);
+      await relay.handleRpc(
+        await sender.signedRpc({'op': 'inventory'}, 'fresh-retry'),
+      );
+    },
+  );
+  test(
     'Payment PIN is encrypted, never saved in intent, and TTL is 600 seconds',
     () async {
       sender.profile!['account']['pin_configured'] = true;

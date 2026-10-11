@@ -136,7 +136,6 @@ class BeyondNetEngine extends ChangeNotifier {
   Timer? timer;
   int backoffSeconds = 5;
   DateTime nextBankAttempt = DateTime.now();
-  final Map<String, int> seenRpc = {};
   final Map<String, DateTime> peerRetry = {};
   final Map<String, int> peerFailures = {};
   final Map<String, String> identityByRadio = {};
@@ -977,7 +976,9 @@ class BeyondNetEngine extends ChangeNotifier {
     if (body['at'] is! int || (body['at'] - nowSeconds).abs() > 120) {
       throw StateError('Peer clock differs by more than two minutes');
     }
-    if (body['request_id'] is! String || body['request_id'].length > 80) {
+    if (body['request_id'] is! String ||
+        body['request_id'].isEmpty ||
+        body['request_id'].length > 80) {
       throw StateError('Invalid request identity');
     }
     await store.savePeer(peer['device_id'], cert);
@@ -985,6 +986,7 @@ class BeyondNetEngine extends ChangeNotifier {
       'peer': peer,
       'command': body['command'],
       'request_id': body['request_id'],
+      'at': body['at'],
     };
   }
 
@@ -992,12 +994,9 @@ class BeyondNetEngine extends ChangeNotifier {
     if (!relay) throw StateError('Nearby relay is off');
     final checked = await validateRpc(message);
     final rid = checked['request_id'];
-    seenRpc.removeWhere((_, t) => t < nowSeconds - 120);
-    if (seenRpc.containsKey(rid)) throw StateError('Replayed peer request');
-    if (seenRpc.length > 1000) throw StateError('Peer request limit');
-    seenRpc[rid] = nowSeconds;
     final cmd = Map<String, dynamic>.from(checked['command']);
     final peer = Map<String, dynamic>.from(checked['peer']);
+    await store.claimRpc(peer['device_id'], rid, checked['at']);
     final response = await command(cmd, peer);
     return signedRpc(response, rid);
   }

@@ -2,7 +2,9 @@
 
 BeyondNet is an Android demo payment app that works online and can also send encrypted requests through nearby phones when the sender has no internet. A laptop runs the Java demo bank and operator [...]
 
-**Version 1.3.3 (Android build 10). Uses free demo INR; no real UPI or bank integration.**
+**Phone version 1.3.4 (Android build 11); bank version 1.3.3. Uses free demo INR; no real UPI or bank integration.**
+
+Phone 1.3.4 adds persistent Bluetooth command replay protection, including across restarts. Install over the existing app; this phone-only update needs no bank restart. See [the security assessment and staged roadmap](docs/SECURITY_ROADMAP.md).
 
 This release also hardens the Java bank and reduces idle traffic and online queue delay. See [review changes and remaining work](docs/REVIEW_IMPROVEMENTS.md). Restart the bank once and install the APK over the existing app. Published legacy demo passwords are rotated on startup; replacements are kept privately in `data/rotated-demo-passwords.json`. Preserve `data/pin-pepper.txt` with your bank identity and backups.
 
@@ -73,7 +75,7 @@ Two phones are enough: offline personal user and online merchant with relay enab
    ```
 
 4. Keep both processes running and the laptop awake and online. Use the HTTPS URL and the fingerprint from the console's **Device setup** page on every phone. See [Ngrok setup](docs/NGROK.md) for this laptop's address and how to update existing phones.
-5. Install **BeyondNet-Android-1.3.3.apk**. Create one Personal and one Merchant account while online. Set a six-digit demo payment PIN online and fund the personal account, then try an online payment before the offline two-phone flow above.
+5. Install **BeyondNet-Android-1.3.4.apk**. Create one Personal and one Merchant account while online. Set a six-digit demo payment PIN online and fund the personal account, then try an online payment before the offline two-phone flow above.
 
 Use the updated bank source with this APK. Existing bank data and app installations are preserved; legacy accounts remain usable through **Sign in**, and previous relay account records become pers[...]
 

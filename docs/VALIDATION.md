@@ -1,6 +1,14 @@
 # Validation and source audit — updated 11 October 2026
 
-Current phone release: **1.3.3+10**, Android 10+. Current backend: Java 21+ / Spring Boot 4.1.1 / PostgreSQL, artifact `bank-1.3.3.jar`.
+Current phone release: **1.3.4+11**, Android 10+. Current backend: Java 21+ / Spring Boot 4.1.1 / PostgreSQL, artifact `bank-1.3.3.jar`.
+
+## Security roadmap update — mobile 1.3.4
+
+Release APK build passed. Verified package `com.offlinekaro.offline_karo`, version `1.3.4` / code `11`, minimum Android API 29, and unchanged signing certificate SHA-256 `87631ca5716266c5e82f64acff27185b6b1d84bd126128546545847427a07ff2`. This retains the existing development signing identity for in-place updates; it does not introduce production signing.
+
+See [security assessment and implementation decisions](SECURITY_ROADMAP.md). Persistent replay admission replaces the memory-only cache; SQLite upgrades to version 4 in place. Financial cryptography, bank implementation, peer wire format and installed signing identity remain unchanged.
+
+Audit: the full Flutter suite passed 84 tests, including actual Dart-to-Java/PostgreSQL integration against an isolated schema, simulated multi-hop routing, mixed protocol peers, restart replay rejection, concurrent duplicates, expiry/skew boundaries, per-peer quota, clock rollback and v1/v3 database upgrades. A subsequently added global 4,096-entry capacity regression passed with all six storage replay tests. Flutter analysis reported no issues. Physical Android chain/locked-screen testing was not performed; automated tests do not prove radio performance. The broader HPKE, hardware signing, revocation, at-rest encryption and routing proposals are documented migration work, not shipped features.
 
 ## Earlier-review improvements — release 1.3.3
 
