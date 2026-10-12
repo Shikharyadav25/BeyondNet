@@ -189,8 +189,6 @@ void main() {
         await pause(gateway);
         final secondGateway = await create('mesh-gateway-two', 'customer');
         await pause(secondGateway);
-        gateway.bankReachable = true;
-        secondGateway.bankReachable = true;
         sender.connectedPeer = intermediate.deviceId;
         sender.nearby = [
           {'device_id': intermediate.deviceId, 'at': nowSeconds},
@@ -209,36 +207,55 @@ void main() {
         }
 
         await edge(sender, intermediate);
-        final packet = (await intermediate.store.packets()).firstWhere(
-          (p) =>
-              p['id'] ==
-              sender.payments.firstWhere(
-                (p) => p['payment_id'] == third,
-              )['packet_id'],
+        final packetId =
+            sender.payments.firstWhere(
+                  (p) => p['payment_id'] == third,
+                )['packet_id']
+                as String;
+        expect(await intermediate.store.packet(packetId), isNull);
+        expect(
+          intermediate.invitations.singleWhere(
+            (invite) => invite['id'] == packetId,
+          )['source'],
+          sender.deviceId,
         );
+        await intermediate.decideRelayInvitation(packetId, true);
+        final packet = (await intermediate.store.packet(packetId))!;
         expect(await gateway.store.packet(packet['id']), isNull);
+        await intermediate.store.chooseRoute(packetId, gateway.deviceId);
         await edge(intermediate, gateway);
+        expect(await gateway.store.packet(packetId), isNull);
+        await gateway.decideRelayInvitation(packetId, true);
+        await intermediate.store.chooseRoute(packetId, secondGateway.deviceId);
         await edge(intermediate, secondGateway);
+        await secondGateway.decideRelayInvitation(packetId, true);
         final forwarded = (await gateway.store.packet(packet['id']))!;
         expect(forwarded['hops'], 2);
+        gateway.bankReachable = true;
+        secondGateway.bankReachable = true;
         // Competing online gateways send the SAME signed request concurrently.
         final results = await Future.wait([
           gateway.submitPacket(forwarded),
           secondGateway.submitPacket(forwarded),
         ]);
         expect(results.first['receipts'], results.last['receipts']);
-        for (final receipt in results.first['receipts']) {
-          await gateway.accept(Map<String, dynamic>.from(receipt));
-        }
-        await edge(intermediate, gateway);
-        await edge(sender, intermediate);
+        // The sender is still offline. When it reconnects, fetch the bank's
+        // device-targeted queued receipt directly, without a reverse mesh edge.
+        expect(
+          sender.payments.firstWhere((p) => p['payment_id'] == third)['state'],
+          isNot('paid'),
+        );
+        await sender.store.uploaded(packetId);
+        sender.bankReachable = true;
+        sender.nextBankAttempt = DateTime.fromMillisecondsSinceEpoch(0);
+        await sender.gatewayTick();
         await sender.reload();
         expect(
           sender.payments.firstWhere((p) => p['payment_id'] == third)['state'],
           'paid',
         );
         expect(sender.account!['balance'], 87505); // only one debit
-        expect(sender.bankReachable, isFalse);
+        expect(sender.bankReachable, isTrue);
         expect(intermediate.bankReachable, isFalse);
 
         // An expired unresolved request keeps funds reserved offline. On

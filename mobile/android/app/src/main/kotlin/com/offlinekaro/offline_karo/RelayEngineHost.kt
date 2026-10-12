@@ -2,6 +2,10 @@ package com.offlinekaro.offline_karo
 
 import android.Manifest
 import android.bluetooth.BluetoothManager
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import androidx.core.app.NotificationCompat
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -17,6 +21,24 @@ import io.flutter.plugin.common.MethodChannel
 /** One application-scoped engine owns SQLite, BLE and timers. The Activity is
  * only a view onto it; the foreground service retains it without an Activity. */
 object RelayEngineHost {
+    private const val INVITATIONS = "beyondnet_relay_requests"
+    private fun notice(context: Context, id: String, title: String, detail: String) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.createNotificationChannel(NotificationChannel(
+            INVITATIONS, "Payment relay requests", NotificationManager.IMPORTANCE_DEFAULT))
+        val open = PendingIntent.getActivity(context, 0,
+            Intent(context, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        manager.notify(id.hashCode(), NotificationCompat.Builder(context, INVITATIONS)
+            .setSmallIcon(R.drawable.ic_relay)
+            .setContentTitle(title)
+            .setContentText(detail)
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .build())
+    }
     private var engine: FlutterEngine? = null
     private var control: MethodChannel? = null
     var activityVisible = false
@@ -110,6 +132,28 @@ object RelayEngineHost {
                     "batterySettings" -> {
                         app.startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
                             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        result.success(true)
+                    }
+                    "noticeRequest" -> {
+                        val args = call.arguments as? Map<*, *>
+                        val id = args?.get("id") as? String ?: "relay"
+                        val name = (args?.get("name") as? String ?: "A nearby phone").take(60)
+                        notice(app, id, "Relay approval requested",
+                            "$name wants to use this phone. Open BeyondNet Nearby to allow or decline.")
+                        result.success(true)
+                    }
+                    "noticeResult" -> {
+                        val args = call.arguments as? Map<*, *>
+                        val id = args?.get("id") as? String ?: "payment"
+                        val status = args?.get("status") as? String ?: "updated"
+                        notice(app, "result:$id", "Bank payment $status",
+                            "Open BeyondNet Activity for the signed receipt.")
+                        result.success(true)
+                    }
+                    "clearRequest" -> {
+                        val id = (call.arguments as? Map<*, *>)?.get("id") as? String
+                        if (id != null) (app.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+                            .cancel(id.hashCode())
                         result.success(true)
                     }
                     else -> result.notImplemented()

@@ -1,8 +1,10 @@
-# Background relay and offline chains — BeyondNet 1.3.2
+# Background relay and offline chains — BeyondNet 1.3.5
+
+For the current approval flow and a step-by-step three/four-phone run, use the [physical mesh guide](MESH_TEST_GUIDE.md). The routing discussion below also records earlier behavior.
 
 ## Phone setup
 
-Install `installers/BeyondNet-Android-1.3.2.apk` over the existing app on every relay phone. Do not uninstall or clear data: enrollment keys, receipts and unresolved requests are retained. Bank API, URL, trust fingerprint and PostgreSQL are unchanged; this update requires no bank restart.
+Install `installers/BeyondNet-Android-1.3.5.apk` over the existing app on every relay phone. Do not uninstall or clear data: enrollment keys, receipts and unresolved requests are retained. Bank API, URL, trust fingerprint and PostgreSQL are unchanged; this update requires no bank restart. All phones should use 1.3.5 for the same approval flow.
 
 Enroll online once, then enable **Nearby relay** while BeyondNet is visible. Grant Nearby devices on Android 12+, or Location while using the app with Location on for Android 10–11. Android 13+ asks for notification permission; denying it does not block the service, but Android may show its Stop control only in active-apps controls. Confirm the relay notification, then leave the app or lock the screen. Offline relays need Bluetooth, supported BLE advertising and valid enrollment. Only the gateway needs internet access to the bank.
 

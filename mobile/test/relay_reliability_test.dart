@@ -78,6 +78,7 @@ void main() {
     bool losePutAck = false,
     bool interrupt = false,
     bool legacy = false,
+    bool approvedProtocol = false,
   }) async {
     Json? identity;
     await a.syncPackets((command) async {
@@ -90,11 +91,15 @@ void main() {
       if (losePutAck && command['op'] == 'put') {
         throw TimeoutException('Stored by peer; response lost');
       }
-      if (legacy && command['op'] == 'inventory') {
+      if ((legacy || !approvedProtocol) && command['op'] == 'inventory') {
         final body = Map<String, dynamic>.from(response['body']);
-        final old = Map<String, dynamic>.from(body['command'])
-          ..remove('routing')
-          ..remove('routes');
+        final old = Map<String, dynamic>.from(body['command']);
+        if (legacy) {
+          old.remove('routing');
+          old.remove('routes');
+        } else {
+          old['routing'] = 2;
+        }
         response = await b.signedRpc(old, requestId);
       }
       final checked = await a.validateRpc(
@@ -177,6 +182,43 @@ void main() {
       expect((await a.store.receipts()).single['status'], 'paid');
       expect(a.account!['balance'], 99900);
       expect(await b.store.receipts(), isEmpty); // relay cannot decrypt receipt
+    },
+  );
+
+  test(
+    'Four phones require each offline relay to approve and choose the next hop',
+    () async {
+      final a = await node('A');
+      final b = await node('B');
+      final c = await node('C');
+      final d = await node('D');
+      final packet = await payment(a);
+      await a.store.chooseRoute(packet['id'] as String, 'B');
+
+      await contact(a, b, approvedProtocol: true);
+      expect(await b.store.packet(packet['id']), isNull);
+      expect(b.invitations.single['source'], 'A');
+      expect(await a.store.packet(packet['id']), isNotNull);
+
+      await b.decideRelayInvitation(packet['id'] as String, true);
+      expect(await b.store.packet(packet['id']), isNotNull);
+      // Without a chosen next phone, C cannot pull an approved packet from B.
+      await contact(c, b, approvedProtocol: true);
+      expect(await c.store.packet(packet['id']), isNull);
+      await b.store.chooseRoute(packet['id'] as String, 'C');
+      await contact(b, c, approvedProtocol: true);
+      expect(c.invitations.single['source'], 'B');
+      expect(await c.store.packet(packet['id']), isNull);
+
+      await c.decideRelayInvitation(packet['id'] as String, true);
+      await c.store.chooseRoute(packet['id'] as String, 'D');
+      await contact(c, d, approvedProtocol: true);
+      expect(d.invitations.single['source'], 'C');
+      await d.store.decideInvitation(packet['id'] as String, true);
+      final delivered = (await d.store.packet(packet['id']))!;
+      expect(delivered['hops'], 3);
+      expect(delivered['path'], ['A', 'B', 'C']);
+      expect(delivered['box'], packet['box']);
     },
   );
 

@@ -11,7 +11,7 @@ class LocalStore {
         '${(await getApplicationSupportDirectory()).path}/offline-karo.sqlite3';
     db = await openDatabase(
       path,
-      version: 4,
+      version: 5,
       onConfigure: (db) async {
         // This assignment returns a row. Android's execSQL rejects statements
         // with results, so use the query path even though it sets a value.
@@ -24,6 +24,7 @@ class LocalStore {
           await db.execute('ALTER TABLE packets ADD COLUMN source TEXT');
         }
         if (old < 4) await _createReplayTable(db);
+        if (old < 5) await _createInvitationTables(db);
       },
       onCreate: (db, _) async {
         await db.execute(
@@ -46,6 +47,7 @@ class LocalStore {
         );
         await _createRelayTables(db);
         await _createReplayTable(db);
+        await _createInvitationTables(db);
       },
     );
   }
@@ -112,6 +114,178 @@ class LocalStore {
   static Future<void> _createRelayTables(DatabaseExecutor db) => db.execute(
     'CREATE TABLE IF NOT EXISTS relay_acks(packet TEXT NOT NULL, peer TEXT NOT NULL, hops INTEGER NOT NULL, expiry INTEGER NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(packet,peer))',
   );
+
+  static Future<void> _createInvitationTables(DatabaseExecutor db) async {
+    await db.execute(
+      'CREATE TABLE relay_invitations(id TEXT PRIMARY KEY, source TEXT NOT NULL, name TEXT NOT NULL, data TEXT NOT NULL, expiry INTEGER NOT NULL, state TEXT NOT NULL)',
+    );
+    await db.execute(
+      'CREATE TABLE relay_routes(packet TEXT PRIMARY KEY, next_peer TEXT NOT NULL)',
+    );
+  }
+
+  Future<String> invite(Json packet, String source, String name) async {
+    await checkPacket(packet);
+    if (packet['expires_at'] <= nowSeconds) {
+      throw StateError('Payment request expired');
+    }
+    return db.transaction((tx) async {
+      if ((await tx.query(
+        'packets',
+        where: 'id=?',
+        whereArgs: [packet['id']],
+      )).isNotEmpty) {
+        return 'accepted';
+      }
+      final existing = await tx.query(
+        'relay_invitations',
+        where: 'id=?',
+        whereArgs: [packet['id']],
+      );
+      if (existing.isNotEmpty) return existing.single['state'] as String;
+      final count = Sqflite.firstIntValue(
+        await tx.rawQuery(
+          "SELECT COUNT(*) FROM relay_invitations WHERE state='pending'",
+        ),
+      )!;
+      final fromPeer = Sqflite.firstIntValue(
+        await tx.rawQuery(
+          "SELECT COUNT(*) FROM relay_invitations WHERE state='pending' AND source=?",
+          [source],
+        ),
+      )!;
+      if (count >= 40 || fromPeer >= 8) {
+        throw StateError('Too many relay invitations');
+      }
+      await tx.insert('relay_invitations', {
+        'id': packet['id'],
+        'source': source,
+        'name': name.length > 80 ? name.substring(0, 80) : name,
+        'data': jsonEncode(packet),
+        'expiry': packet['expires_at'],
+        'state': 'pending',
+      });
+      return 'new';
+    });
+  }
+
+  Future<List<Json>> invitations() async => (await db.query(
+    'relay_invitations',
+    where: "state='pending' AND expiry>?",
+    whereArgs: [nowSeconds],
+    orderBy: 'rowid DESC',
+  )).map((r) => Map<String, dynamic>.from(r)).toList();
+
+  Future<Json?> decideInvitation(String id, bool allow) async {
+    return db.transaction((tx) async {
+      final rows = await tx.query(
+        'relay_invitations',
+        where: 'id=?',
+        whereArgs: [id],
+      );
+      if (rows.isEmpty || rows.single['state'] != 'pending') return null;
+      final row = rows.single;
+      if ((row['expiry'] as int) <= nowSeconds) {
+        await tx.update(
+          'relay_invitations',
+          {'state': 'expired'},
+          where: 'id=?',
+          whereArgs: [id],
+        );
+        return null;
+      }
+      final packet = Map<String, dynamic>.from(
+        jsonDecode(row['data'] as String),
+      );
+      if (allow) {
+        final count = Sqflite.firstIntValue(
+          await tx.rawQuery('SELECT COUNT(*) FROM packets'),
+        )!;
+        final used = Sqflite.firstIntValue(
+          await tx.rawQuery(
+            'SELECT COALESCE(SUM(LENGTH(data)),0) FROM packets',
+          ),
+        )!;
+        final peerCount = Sqflite.firstIntValue(
+          await tx.rawQuery('SELECT COUNT(*) FROM packets WHERE source=?', [
+            row['source'],
+          ]),
+        )!;
+        if (count >= 900 ||
+            used + canonical(packet).length > 8 * 1024 * 1024 ||
+            peerCount >= 100) {
+          throw StateError(
+            'Relay storage is full. Decline or try again later.',
+          );
+        }
+        // Store and approve in one SQLite transaction. A sender only treats an
+        // accepted inventory entry as custody once this transaction commits.
+        await tx.insert('packets', {
+          'id': id,
+          'data': jsonEncode(packet),
+          'expiry': packet['expires_at'],
+          'uploaded': 0,
+          'source': row['source'],
+        }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+      await tx.update(
+        'relay_invitations',
+        {'state': allow ? 'accepted' : 'declined'},
+        where: 'id=?',
+        whereArgs: [id],
+      );
+      return packet;
+    });
+  }
+
+  Future<void> chooseRoute(String packet, String peer) => db.insert(
+    'relay_routes',
+    {'packet': packet, 'next_peer': peer},
+    conflictAlgorithm: ConflictAlgorithm.replace,
+  );
+
+  Future<void> clearRoute(String packet) =>
+      db.delete('relay_routes', where: 'packet=?', whereArgs: [packet]);
+
+  Future<String?> route(String packet) async {
+    final rows = await db.query(
+      'relay_routes',
+      where: 'packet=?',
+      whereArgs: [packet],
+    );
+    return rows.isEmpty ? null : rows.single['next_peer'] as String;
+  }
+
+  Future<bool> requiresRoute(String packet) async {
+    final rows = await db.query(
+      'relay_invitations',
+      columns: ['id'],
+      where: "id=? AND state='accepted'",
+      whereArgs: [packet],
+    );
+    return rows.isNotEmpty;
+  }
+
+  Future<String?> packetSource(String packet) async {
+    final rows = await db.query(
+      'packets',
+      columns: ['source'],
+      where: 'id=?',
+      whereArgs: [packet],
+    );
+    return rows.isEmpty ? null : rows.single['source'] as String?;
+  }
+
+  Future<List<Json>> awaitingRoute() async {
+    final rows = await db.rawQuery(
+      "SELECT p.id, p.source, p.expiry, r.next_peer FROM packets p "
+      "JOIN relay_invitations i ON i.id=p.id AND i.state='accepted' "
+      "LEFT JOIN relay_routes r ON r.packet=p.id "
+      "WHERE p.source IS NOT NULL AND p.uploaded=0 AND p.expiry>? LIMIT 40",
+      [nowSeconds],
+    );
+    return rows.map((r) => Map<String, dynamic>.from(r)).toList();
+  }
 
   Future<void> acknowledge(String packet, String peer, int hops, int expiry) =>
       db.insert('relay_acks', {
@@ -301,6 +475,11 @@ class LocalStore {
     'data': jsonEncode(cert),
   }, conflictAlgorithm: ConflictAlgorithm.replace);
   Future<void> cleanup() async {
+    await db.delete(
+      'relay_invitations',
+      where: 'expiry<?',
+      whereArgs: [nowSeconds - 7 * 86400],
+    );
     await db.delete('relay_acks', where: 'expiry<=?', whereArgs: [nowSeconds]);
     // Keep original ciphertext for unresolved owned requests, even beyond
     // relay retention, so the bank can later return a definitive expiry result
@@ -321,6 +500,9 @@ class LocalStore {
           await tx.delete('packets', where: 'id=?', whereArgs: [row['id']]);
         }
       }
+      await tx.execute(
+        'DELETE FROM relay_routes WHERE packet NOT IN (SELECT id FROM packets)',
+      );
     });
   }
 }

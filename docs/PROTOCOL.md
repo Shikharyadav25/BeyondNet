@@ -83,7 +83,7 @@ Service UUID: `f953c610-4f9e-4ac8-a6d6-6f666b61726f`.
 
 Read/write characteristic UUID: `f953c611-4f9e-4ac8-a6d6-6f666b61726f`.
 
-Phones advertise and scan for this service. A central establishes a short connection, discovers the characteristic, exchanges messages, then disconnects. Either direction can initiate. No OS-level manual pairing is required; application messages authenticate against bank-issued certificates.
+Phones advertise this service. A broad scan keeps advertisements with its service UUID or BeyondNet name; bank-signed certificates authenticate each peer. A central establishes a short connection, discovers the characteristic, exchanges messages, then disconnects. Either direction can initiate. No OS-level manual pairing is required.
 
 Messages are canonical JSON, bounded at 12,288 bytes. Each ATT write/read carries at most 20 bytes:
 
@@ -97,7 +97,7 @@ Responses use small reads below the minimum MTU’s long-read threshold. The cen
 
 ## Authenticated peer commands
 
-A peer message contains a bank-signed certificate plus an Ed25519-signed body with fresh UUID `request_id`, `at` Unix seconds, and a command. Responses echo the request ID and are verified against the enrolled peer. Clocks must be within two minutes. Recently seen request IDs reject replay in the current session. This authenticates commands; it is not BLE link encryption or a general-purpose secure transport.
+A peer message contains a bank-signed certificate plus an Ed25519-signed body with fresh UUID `request_id`, `at` Unix seconds, and a command. Responses echo the request ID and are verified against the enrolled peer. Clocks must be within two minutes. Claimed request IDs persist in phone SQLite through the signed clock window, including across app restarts. This authenticates commands; it is not BLE link encryption or a general-purpose secure transport.
 
 Commands:
 
@@ -106,8 +106,9 @@ Commands:
 | `inventory`, `offset` | At most 48 sorted active packet IDs and a next cursor; bounded by the store cap |
 | `get`, `id` | Eligible packet with incremented forwarding metadata, or `missing` |
 | `put`, `packet` | Validate, persist, attempt local delivery; then signed `stored` acknowledgment |
+| `offer`, `packet` | Routing v3: save a payment invitation and return `pending`, `declined`, or `accepted`. `pending` is not custody. The receiving user must allow it before the packet becomes forwardable. Older peers continue to use `put`. |
 
-Sync exchanges inventories, pulls up to eight missing packets, and pushes up to eight missing packets per connection. Every five seconds the foreground engine considers another round. Successful peers have a cooldown; failures back off up to 60 seconds. Gateway retries similarly back off. The original request remains available for idempotent recovery.
+Sync exchanges inventories, pulls up to eight missing packets, and pushes up to eight missing packets per connection. Routing v3 inventories identify approval-capable peers. An accepted offline relay chooses its next verified phone. Every five seconds the engine considers another round; at most two nearby connections are attempted per pass. Successful peers have a cooldown; failures back off up to 60 seconds. Gateway retries similarly back off. The original request remains available for idempotent recovery. The sender can also fetch its queued encrypted receipt directly from the bank by registered device ID when internet returns.
 
 ## Retention
 

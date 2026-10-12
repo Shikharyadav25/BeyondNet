@@ -86,6 +86,7 @@ class BleTransport implements PeerTransport {
   final void Function(String) onEvent;
   @override
   bool running = false;
+  bool _connecting = false;
   Timer? cleanup;
   BleTransport(
     this.handler,
@@ -121,6 +122,15 @@ class BleTransport implements PeerTransport {
     }
     subscriptions.add(
       central.discovered.listen((e) {
+        // Some Android scanners miss a 128-bit service UUID when filtering in
+        // the controller. A peer's name also helps when scan records omit the
+        // UUID; the signed device certificate still authenticates the peer.
+        if (!e.advertisement.serviceUUIDs.any(
+              (uuid) => uuid.toString() == serviceId.toString(),
+            ) &&
+            e.advertisement.name != 'BeyondNet') {
+          return;
+        }
         final id = e.peripheral.uuid.toString();
         discovered[id] = PeerRadio(e.peripheral, e.rssi);
       }),
@@ -231,7 +241,7 @@ class BleTransport implements PeerTransport {
       await peripheral.startAdvertising(
         Advertisement(name: 'BeyondNet', serviceUUIDs: [serviceId]),
       );
-      await central.startDiscovery(serviceUUIDs: [serviceId]);
+      await central.startDiscovery();
       running = true;
       cleanup = Timer.periodic(const Duration(seconds: 20), (_) {
         for (final id in touched.keys.toList()) {
@@ -265,8 +275,22 @@ class BleTransport implements PeerTransport {
     PeerRadio peer,
     Future<T> Function(Future<Json> Function(Json)) run,
   ) async {
+    if (_connecting) {
+      throw StateError(
+        'Another Bluetooth exchange is in progress. Retry shortly.',
+      );
+    }
+    _connecting = true;
     final p = peer.peripheral;
+    var scanningPaused = false;
     try {
+      // Android devices can return GATT status 133 when an active low-latency
+      // scan competes with a connection and hundreds of ATT writes. Keep the
+      // peripheral advertiser running so the other phone can still find us.
+      if (running) {
+        await central.stopDiscovery().timeout(const Duration(seconds: 3));
+        scanningPaused = true;
+      }
       await central.connect(p).timeout(const Duration(seconds: 10));
       final services = await central
           .discoverGATT(p)
@@ -311,8 +335,16 @@ class BleTransport implements PeerTransport {
       return await run(rpc);
     } finally {
       try {
-        await central.disconnect(p);
+        await central.disconnect(p).timeout(const Duration(seconds: 3));
       } catch (_) {}
+      if (scanningPaused && running) {
+        try {
+          await central.startDiscovery().timeout(const Duration(seconds: 6));
+        } catch (error) {
+          onEvent('Nearby scan could not resume: $error');
+        }
+      }
+      _connecting = false;
     }
   }
 

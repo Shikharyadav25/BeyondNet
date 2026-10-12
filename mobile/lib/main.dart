@@ -1191,7 +1191,7 @@ class _ShellState extends State<Shell> {
       ),
       const SizedBox(height: 12),
       const Hint(
-        'Nearby phones carry encrypted packets. A phone with internet can send them to the bank and bring receipts back.',
+        'Nearby phones carry encrypted requests after approval. An internet-connected phone submits them to the bank. Your signed receipt is also waiting at the bank when your own internet returns.',
       ),
       const SizedBox(height: 23),
       Box(
@@ -1243,7 +1243,7 @@ class _ShellState extends State<Shell> {
             ),
             const SizedBox(height: 8),
             const Hint(
-              'No special gateway account is needed. An online phone with relay enabled automatically connects the nearby network to the bank.',
+              'No special gateway account is needed. An online phone sends an accepted request to the bank automatically.',
             ),
           ],
         ),
@@ -1305,6 +1305,112 @@ class _ShellState extends State<Shell> {
         ),
       ),
       const SizedBox(height: 20),
+      if (e.invitations.isNotEmpty) ...[
+        const Eyebrow('REQUESTS WAITING FOR YOUR APPROVAL'),
+        const SizedBox(height: 10),
+        ...e.invitations.map(
+          (invitation) => Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Box(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${invitation['name']} wants this phone to carry an encrypted payment.',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 7),
+                  const Hint(
+                    'You cannot read or change the payment. Accepting stores it; an online phone sends it to the bank automatically.',
+                  ),
+                  Row(
+                    children: [
+                      TextButton(
+                        onPressed: () async {
+                          try {
+                            await e.decideRelayInvitation(
+                              invitation['id'] as String,
+                              false,
+                            );
+                          } catch (error) {
+                            if (mounted) await alert(context, error);
+                          }
+                        },
+                        child: const Text('Decline'),
+                      ),
+                      FilledButton(
+                        onPressed: () async {
+                          try {
+                            await e.decideRelayInvitation(
+                              invitation['id'] as String,
+                              true,
+                            );
+                          } catch (error) {
+                            if (mounted) await alert(context, error);
+                          }
+                        },
+                        child: const Text('Allow relay'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+      ],
+      if (!e.bankReachable && e.relayQueue.isNotEmpty) ...[
+        const Eyebrow('CHOOSE THE NEXT PHONE'),
+        const SizedBox(height: 10),
+        ...e.relayQueue.map(
+          (packet) => Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Box(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Encrypted request ${(packet['id'] as String).substring(0, 8)}',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 7),
+                  Hint(
+                    packet['next_peer'] == null
+                        ? 'This phone is offline. Select another verified phone to ask it to carry the request.'
+                        : 'Next phone selected. You can choose a different one if it is unavailable.',
+                  ),
+                  ...e.nearby
+                      .where((p) => p['device_id'] != packet['source'])
+                      .map(
+                        (peer) => TextButton.icon(
+                          icon: Icon(
+                            peer['online'] == true
+                                ? Icons.cloud_done
+                                : Icons.bluetooth,
+                          ),
+                          label: Text(
+                            'Request ${peer['name']} · ${peer['online'] == true ? 'internet on' : 'internet off'}',
+                          ),
+                          onPressed: () async {
+                            try {
+                              await e.chooseRelayRoute(
+                                packet['id'] as String,
+                                peer['device_id'] as String,
+                              );
+                            } catch (error) {
+                              if (mounted) await alert(context, error);
+                            }
+                          },
+                        ),
+                      ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+      ],
       if (e.nearby.isEmpty)
         const Box(
           child: Hint(
@@ -1329,7 +1435,7 @@ class _ShellState extends State<Shell> {
                       ),
                     ),
                     Text(
-                      '${p['rssi']} dBm',
+                      p['rssi'] is int ? '${p['rssi']} dBm' : 'Nearby',
                       style: const TextStyle(fontSize: 11, color: muted),
                     ),
                   ],

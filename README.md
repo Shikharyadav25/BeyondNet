@@ -6,7 +6,7 @@ BeyondNet is an Android payment proof of concept for environments with unreliabl
 
 | Mobile release | Bank release | Supported platform | Payment environment |
 | --- | --- | --- | --- |
-| **1.3.4 · build 11** | **1.3.3** | **Android 10+** | **Simulated INR** |
+| **1.3.5 · build 12** | **1.3.3** | **Android 10+** | **Simulated INR** |
 
 > BeyondNet uses demo funds and has no real UPI or banking integration. Payment initiation can happen offline; final settlement requires an internet-connected gateway to reach the bank.
 
@@ -43,7 +43,7 @@ flowchart LR
 - **Discovered topology:** two phones work without an intermediate relay; additional offline phones can form a chain, bounded by the four-hop limit.
 - **Ciphertext forwarding:** payment instructions and the demo PIN are encrypted for the bank. Relaying does not authorize a debit.
 - **Internet-only bank:** the bank never joins Bluetooth and need not be near the phones. The current deployment runs on a laptop with hosted Neon PostgreSQL; local PostgreSQL is also supported.
-- **Flexible receipt return:** receipts prefer the recorded request path and can use another eligible route when devices move or disconnect.
+- **Receipt recovery:** the bank saves a signed outcome for the sender's registered device. When that phone regains internet, it receives the outcome through WebSocket or fetches it through HTTPS, without needing the relay chain to remain intact.
 
 ### Payment flow
 
@@ -58,17 +58,20 @@ sequenceDiagram
     Note over P,B: Enroll online, verify bank trust, set PIN and add demo funds before offline use
     P->>P: Select recipient, review amount, enter PIN and authorize on device
     P->>P: Sign, encrypt and atomically save request
-    P->>R: Transfer encrypted packet over BLE
-    R->>R: Persist before acknowledging custody
-    R-->>P: Stored acknowledgment · payment still pending
-    R->>G: Forward encrypted packet
+    P->>R: Offer encrypted packet over BLE
+    R->>R: Save request and notify user
+    R-->>P: Invitation saved · payment still pending
+    R->>R: User accepts and selects next phone
+    R->>G: Offer encrypted packet over BLE
+    G->>G: User accepts gateway request
     G->>B: Submit over WSS or HTTPS
     B->>B: Verify sender, signature, PIN, expiry and instruction identity
     B->>D: Check duplicate and funds, then atomically commit outcome
     D-->>B: Saved decision, ledger and receipts
     B-->>G: Signed, encrypted bank receipt
-    G-->>R: Relay receipt
-    R-->>P: Return receipt over BLE
+    Note over P,B: Bank also queues the outcome for the sender's registered device
+    P->>B: On internet return, retrieve device inbox
+    B-->>P: Saved signed receipt
     P->>P: Verify receipt and update status
     Note over P,B: Online senders submit directly. Retries recover the original bank decision.
 ```
@@ -89,11 +92,11 @@ The authorization window is **10 minutes**, not a processing delay. Reachable re
 | Settlement | Funds preflight, unresolved-payment reservations, atomic debit/credit entries, duplicate recovery and bank-enforced balance checks |
 | Operator console | Local authenticated overview, payment decisions, ledger, enrollment QR and labelled software rehearsal |
 
-### Latest release: 1.3.4
+### Latest release: 1.3.5
 
-Mobile 1.3.4 adds **persistent Bluetooth command replay protection**. Accepted request identities survive restarts, simultaneous duplicates are admitted atomically, and bounded storage retains protection throughout the signed timestamp window. Clock rollback is detected before further admission.
+Mobile 1.3.5 adds saved relay invitations and explicit approval at each hop, route selection for offline relays, direct bank receipt recovery when the sender returns online, and more resilient Bluetooth scanning and connection retries. The 1.3.4 persistent Bluetooth command replay protection remains in place.
 
-Payment encryption, peer formats and enrolled identities remain compatible. Install over the existing app. Updating from mobile 1.3.3 to 1.3.4 needs no bank restart or URL/fingerprint change. Older compatible peers can communicate, but their receivers retain the earlier replay limitation until updated.
+Install over the existing app on every participating phone to preserve enrollment and queued payments. The bank needs no restart or URL/fingerprint change. Earlier APKs can still exchange packets through the legacy route, but they do not provide the new approval flow; use 1.3.5 on all demo phones.
 
 See the [security roadmap](docs/SECURITY_ROADMAP.md) and [previous bank improvements](docs/REVIEW_IMPROVEMENTS.md).
 
@@ -173,7 +176,7 @@ Keep the bank and tunnel running, and the laptop awake and online during testing
 
 ### 3. Install and enroll the phones
 
-Download [BeyondNet Android 1.3.4](installers/BeyondNet-Android-1.3.4.apk) onto each Android 10+ phone, or build from source below. Update existing installations in place to preserve keys and queued payments.
+Download [BeyondNet Android 1.3.5](installers/BeyondNet-Android-1.3.5.apk) onto each Android 10+ phone, or build from source below. Update existing installations in place to preserve keys and queued payments.
 
 1. While online, scan the bank QR or select its image from the gallery.
 2. Create Personal and Merchant accounts with unique IDs ending in `@beyondnet` and passwords of at least eight characters.
@@ -184,9 +187,9 @@ There are no public default login credentials. Create your own demo accounts and
 
 ### 4. Try offline delivery
 
-**Two phones:** enable Nearby relay on both, keep the merchant online, and switch off the sender's internet while leaving Bluetooth enabled. Scan, connect to the verified merchant device and pay by ID or QR.
+**Two phones:** enable Nearby relay on both, keep the gateway phone online, and switch off the sender's internet while leaving Bluetooth enabled. Scan and connect to the verified gateway, pay by ID or QR, then accept the request on the gateway.
 
-**Three or more phones:** place an enrolled offline relay between the sender and an online gateway. To demonstrate a chain, ensure the sender cannot directly reach the gateway. Match the final receipt with one debit and one credit in the bank.
+**Three or more phones:** place an enrolled offline relay between the sender and an online gateway. The relay accepts the request and selects the next phone; the gateway accepts and uploads it. To demonstrate a chain, ensure the sender cannot directly reach the gateway. Match the final receipt with one debit and one credit in the bank. See the [mesh test guide](docs/MESH_TEST_GUIDE.md).
 
 | Requirement | When needed |
 | --- | --- |
@@ -283,7 +286,10 @@ The released nearby transport is Bluetooth LE. No iPhone app or Wi-Fi mesh is in
 | [Neon setup](docs/NEON_SETUP.md) | Hosted database configuration and backups |
 | [Development](docs/DEVELOPMENT.md) | Build tools and implementation rules |
 | [Developer build flow](docs/BUILD_FLOW.md) | Implementation order and file responsibilities |
+| [Folder cheatsheet](docs/FOLDER_CHEATSHEET.md) | Beginner-friendly map of folders and where to find things |
+| [File cheatsheet](docs/FILE_CHEATSHEET.md) | Plain-language purpose of every tracked project file |
 | [Background relay](docs/BACKGROUND_RELAY.md) | Service lifecycle and physical acceptance |
+| [Physical mesh test](docs/MESH_TEST_GUIDE.md) | Three- and four-phone approval and recovery steps |
 | [Security roadmap](docs/SECURITY_ROADMAP.md) | Limitations and staged upgrades |
 | [Validation](docs/VALIDATION.md) | Release checks and evidence limits |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Common setup and runtime problems |

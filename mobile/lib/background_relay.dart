@@ -20,5 +20,11 @@ class BackgroundRelay {
       channel.invokeMethod('update', {'text': text});
   Future<void> batterySettings() async =>
       channel.invokeMethod('batterySettings');
+  Future<void> noticeRequest(String id, String name) async =>
+      channel.invokeMethod('noticeRequest', {'id': id, 'name': name});
+  Future<void> noticeResult(String id, String status) async =>
+      channel.invokeMethod('noticeResult', {'id': id, 'status': status});
+  Future<void> clearRequest(String id) async =>
+      channel.invokeMethod('clearRequest', {'id': id});
   void dispose() => channel.setMethodCallHandler(null);
 }

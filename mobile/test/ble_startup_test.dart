@@ -27,6 +27,13 @@ class FakeCentral implements CentralManager {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+class FakePeer implements Peripheral {
+  @override
+  final UUID uuid = UUID.fromString('12345678-1234-1234-1234-123456789abc');
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 class FakePeripheral implements PeripheralManager {
   final writes =
       StreamController<GATTCharacteristicWriteRequestedEventArgs>.broadcast();
@@ -115,6 +122,27 @@ void main() {
       expect(radio.running, isTrue);
       expect(central.scans, 1);
       expect(peripheral.advertisements, 1);
+    },
+  );
+  test(
+    'Broad scan retains a BeyondNet peer even when its service UUID is omitted',
+    () async {
+      await radio.start();
+      final peer = FakePeer();
+      central.events.add(
+        DiscoveredEventArgs(peer, -57, Advertisement(name: 'BeyondNet')),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(radio.discovered[peer.uuid.toString()]?.rssi, -57);
+      central.events.add(
+        DiscoveredEventArgs(
+          FakePeer(),
+          -31,
+          Advertisement(name: 'Unrelated device'),
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(radio.discovered[peer.uuid.toString()]?.rssi, -57);
     },
   );
   test('Refused GATT registration retries with a fresh server', () async {
