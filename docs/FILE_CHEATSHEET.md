@@ -88,6 +88,7 @@ The Java bank uses PostgreSQL. The phone uses SQLite for local packet/state stor
 | `mobile/lib/bank_setup_code.dart` | Parses and validates bank-setup QR configuration before use. |
 | `mobile/lib/bank_setup_scan.dart` | Camera QR screen plus gallery-image decoding and image-picker recovery. |
 | `mobile/lib/ble_transport.dart` | Bluetooth LE discovery, advertising, connections and framed peer-message transport. |
+| `mobile/lib/ble_frames.dart` | Indexed Bluetooth chunks and repeatable response reads; rejects gaps and conflicting retransmissions. |
 | `mobile/lib/engine.dart` | Coordinates login, enrollment, funding, online submissions, offline forwarding, retries, balances and receipts. |
 | `mobile/lib/main.dart` | Flutter entry point and primary screens: signup/login, home, nearby, device settings, pay, receive and activity. |
 | `mobile/lib/nearby_permissions.dart` | Checks and requests the Android permissions needed for nearby Bluetooth operation. |
@@ -133,6 +134,7 @@ The Java bank uses PostgreSQL. The phone uses SQLite for local packet/state stor
 | `mobile/test/background_relay_test.dart` | Checks the Dart/native background service bridge. |
 | `mobile/test/bank_setup_test.dart` | Checks setup QR parsing and validation. |
 | `mobile/test/ble_startup_test.dart` | Checks BLE server startup/session handling. |
+| `mobile/test/ble_frames_test.dart` | Checks indexed chunk integrity, duplicate writes, repeated reads and transfer isolation at minimum/negotiated MTUs. |
 | `mobile/test/engine_test.dart` | Checks payment-engine behavior with controlled dependencies. |
 | `mobile/test/fixtures/python-wire.json` | Fixed cross-language wire examples for protocol checks, not live account data. |
 | `mobile/test/live_bank_test.dart` | Integration checks involving the running Java bank and Dart client. |
@@ -202,7 +204,9 @@ The Java bank uses PostgreSQL. The phone uses SQLite for local packet/state stor
 | File | What it is used for |
 |---|---|
 | `installers/BeyondNet-Android-1.2.1.apk` | Archived older Android release; keep separate from the current release. |
-| `installers/BeyondNet-Android-1.3.4.apk` | Current checked-in Android release package. |
+| `installers/BeyondNet-Android-1.3.4.apk` | Archived Android release package. |
+| `installers/BeyondNet-Android-1.3.5.apk` | Earlier release introducing relay approval. |
+| `installers/BeyondNet-Android-1.3.6.apk` | Current Android release with indexed BLE transfers and contextual relay actions. |
 | `installers/BeyondNet-Android.apk` | Convenience symlink pointing to the selected Android release. |
 | `installers/BeyondNet-bank-setup.png` | Exported setup QR image. Its URL/fingerprint belong to the bank configuration at generation time. |
 | `installers/SHA256SUMS.txt` | Checksums for verifying installer artifact integrity. |

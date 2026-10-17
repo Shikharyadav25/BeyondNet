@@ -83,6 +83,30 @@ Service UUID: `f953c610-4f9e-4ac8-a6d6-6f666b61726f`.
 
 Read/write characteristic UUID: `f953c611-4f9e-4ac8-a6d6-6f666b61726f`.
 
+Mobile 1.3.6 additionally exposes indexed read/write characteristic
+`f953c612-4f9e-4ac8-a6d6-6f666b61726f`. Updated peers prefer this characteristic;
+the original characteristic remains available for older peers. Signed RPCs,
+certificates, encrypted bank packets and payment identities are unchanged.
+
+The indexed transport uses a seven-byte header: flags (one byte), transfer tag
+(four bytes, big endian), and frame index (two bytes, big endian), followed by
+payload. Start/end use flag bits 0/1. Duplicate identical writes are ignored;
+gaps, conflicting retransmissions and malformed frames are rejected. Complete
+messages remain bounded to 12,288 bytes. Each RPC uses a new transfer tag.
+
+To read response frame N, the central first writes flag `4`, the transfer tag and
+N with no payload, then reads the characteristic. Reading does not remove the
+frame: repeated reads return identical bytes. The central validates the returned
+tag and index before assembling it. A single `[0]` means the handler has not
+finished. Starting a new request clears the previous response before any request
+acknowledgment can expose stale data. Disconnects retry the signed exchange with
+a fresh request ID; financial idempotency remains bank-controlled.
+
+Android requests MTU 185 when supported. Frames use at most 180 bytes and always
+fit the negotiated MTU minus three bytes. Refused negotiation falls back to
+20-byte frames. The existing framing described below applies to the original
+characteristic only.
+
 Phones advertise this service. A broad scan keeps advertisements with its service UUID or BeyondNet name; bank-signed certificates authenticate each peer. A central establishes a short connection, discovers the characteristic, exchanges messages, then disconnects. Either direction can initiate. No OS-level manual pairing is required.
 
 Messages are canonical JSON, bounded at 12,288 bytes. Each ATT write/read carries at most 20 bytes:

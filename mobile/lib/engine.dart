@@ -1314,6 +1314,7 @@ class BeyondNetEngine extends ChangeNotifier {
 
       await syncPackets(rpc, () => peerIdentity!);
     });
+    lastError = null;
   }
 
   /// The production exchange is transport-independent so fault tests execute

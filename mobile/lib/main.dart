@@ -1450,27 +1450,31 @@ class _ShellState extends State<Shell> {
                       ? 'Internet gateway available'
                       : 'Nearby relay · internet route not yet known',
                 ),
-                const SizedBox(height: 10),
-                FilledButton(
-                  onPressed: starting
-                      ? null
-                      : () async {
-                          setState(() => starting = true);
-                          try {
-                            await e.connectNearby(p['device_id']);
-                            if (mounted) setState(() => tab = 0);
-                          } catch (error) {
-                            if (mounted) await alert(context, error);
-                          } finally {
-                            if (mounted) setState(() => starting = false);
-                          }
-                        },
-                  child: Text(
-                    e.connectedPeer == p['device_id'] && e.canPay
-                        ? 'Connected · continue'
-                        : 'Connect',
+                if (!e.bankReachable &&
+                    e.invitations.isEmpty &&
+                    e.relayQueue.isEmpty) ...[
+                  const SizedBox(height: 10),
+                  FilledButton(
+                    onPressed: starting
+                        ? null
+                        : () async {
+                            setState(() => starting = true);
+                            try {
+                              await e.connectNearby(p['device_id']);
+                              if (mounted) setState(() => tab = 0);
+                            } catch (error) {
+                              if (mounted) await alert(context, error);
+                            } finally {
+                              if (mounted) setState(() => starting = false);
+                            }
+                          },
+                    child: Text(
+                      e.connectedPeer == p['device_id'] && e.canPay
+                          ? 'Connected · continue'
+                          : 'Connect for payment',
+                    ),
                   ),
-                ),
+                ],
               ],
             ),
           ),
@@ -1624,7 +1628,7 @@ class _ShellState extends State<Shell> {
         'BeyondNet is a demo bank system. Payments settle only when a gateway reaches the bank. A relay acknowledgment is not proof of payment. Enabled Bluetooth relay continues in a visible background service; force-stop and device battery restrictions can interrupt it.',
       ),
       const SizedBox(height: 20),
-      const Center(child: Eyebrow('BEYONDNET · VERSION 1.2.1')),
+      const Center(child: Eyebrow('BEYONDNET · VERSION 1.3.6')),
     ],
   );
   Future<void> editPeers() async {

@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:bluetooth_low_energy/bluetooth_low_energy.dart';
 
 import 'protocol.dart';
 import 'android_ble_session.dart';
+import 'ble_frames.dart';
 
 // Small ATT-safe frames: one flag byte + <=19 bytes, never a long GATT read.
 // Bit 0 starts a message; bit 1 ends it. Empty [0] means response pending.
@@ -14,6 +16,7 @@ const frameSize = 19;
 const maxRpcBytes = 12288;
 final serviceId = UUID.fromString('f953c610-4f9e-4ac8-a6d6-6f666b61726f');
 final rpcId = UUID.fromString('f953c611-4f9e-4ac8-a6d6-6f666b61726f');
+final indexedRpcId = UUID.fromString('f953c612-4f9e-4ac8-a6d6-6f666b61726f');
 List<Uint8List> frames(List<int> data) => [
   for (var i = 0; i < data.length; i += frameSize)
     Uint8List.fromList([
@@ -81,6 +84,7 @@ class BleTransport implements PeerTransport {
   final Map<String, List<Uint8List>> outgoing = {};
   final Map<String, DateTime> touched = {};
   final Set<String> processing = {};
+  final Map<String, IndexedBleSession> indexed = {};
   final List<StreamSubscription> subscriptions = [];
   final Future<Json> Function(Json) handler;
   final void Function(String) onEvent;
@@ -138,6 +142,10 @@ class BleTransport implements PeerTransport {
     subscriptions.add(
       peripheral.characteristicWriteRequested.listen((e) async {
         final id = e.central.uuid.toString();
+        if (e.characteristic.uuid == indexedRpcId) {
+          await _indexedWrite(e, id);
+          return;
+        }
         try {
           if (e.characteristic.uuid != rpcId ||
               e.request.offset != 0 ||
@@ -182,15 +190,31 @@ class BleTransport implements PeerTransport {
       peripheral.characteristicReadRequested.listen((e) async {
         final id = e.central.uuid.toString();
         touched[id] = DateTime.now();
-        final q = outgoing[id];
-        final value = (q != null && q.isNotEmpty)
-            ? q.removeAt(0)
-            : Uint8List.fromList([0]);
-        final offset = e.request.offset;
-        await peripheral.respondReadRequestWithValue(
-          e.request,
-          value: offset <= value.length ? value.sublist(offset) : Uint8List(0),
-        );
+        try {
+          final q = outgoing[id];
+          final value = e.characteristic.uuid == indexedRpcId
+              ? indexed[id]?.read() ?? Uint8List.fromList([0])
+              : (q != null && q.isNotEmpty)
+              ? q.first
+              : Uint8List.fromList([0]);
+          final offset = e.request.offset;
+          await peripheral.respondReadRequestWithValue(
+            e.request,
+            value: offset <= value.length
+                ? value.sublist(offset)
+                : Uint8List(0),
+          );
+          if (e.characteristic.uuid == rpcId &&
+              q != null &&
+              q.isNotEmpty &&
+              offset == 0) {
+            q.removeAt(0);
+          }
+        } catch (_) {
+          // A disconnect/service restart can invalidate a pending read. Do not
+          // leak an unhandled async exception or claim a storage ACK.
+          onEvent('Bluetooth read interrupted; saved packets will retry.');
+        }
       }),
     );
     final characteristic = GATTCharacteristic.mutable(
@@ -219,7 +243,21 @@ class BleTransport implements PeerTransport {
                   uuid: serviceId,
                   isPrimary: true,
                   includedServices: [],
-                  characteristics: [characteristic],
+                  characteristics: [
+                    characteristic,
+                    GATTCharacteristic.mutable(
+                      uuid: indexedRpcId,
+                      properties: [
+                        GATTCharacteristicProperty.read,
+                        GATTCharacteristicProperty.write,
+                      ],
+                      permissions: [
+                        GATTCharacteristicPermission.read,
+                        GATTCharacteristicPermission.write,
+                      ],
+                      descriptors: [],
+                    ),
+                  ],
                 ),
               )
               .timeout(const Duration(seconds: 8));
@@ -249,6 +287,7 @@ class BleTransport implements PeerTransport {
               !processing.contains(id)) {
             incoming.remove(id);
             outgoing.remove(id);
+            indexed.remove(id);
             touched.remove(id);
           }
         }
@@ -267,6 +306,80 @@ class BleTransport implements PeerTransport {
         );
       }
       rethrow;
+    }
+  }
+
+  Future<void> _indexedWrite(
+    GATTCharacteristicWriteRequestedEventArgs e,
+    String id,
+  ) async {
+    var acknowledged = false;
+    try {
+      if (e.request.offset != 0 || e.request.value.isEmpty) {
+        throw const FormatException('Invalid BLE write');
+      }
+      if (!indexed.containsKey(id) && indexed.length >= 8) {
+        throw StateError('Peer session limit');
+      }
+      touched[id] = DateTime.now();
+      final session = indexed.putIfAbsent(id, IndexedBleSession.new);
+      final frame = e.request.value;
+      if (frame[0] == 4) {
+        session.select(frame);
+        await peripheral.respondWriteRequest(e.request);
+        return;
+      }
+      if (frame.length < BleFrames.header) {
+        throw const FormatException('Invalid BLE frame');
+      }
+      if (session.assembly.transfer != BleFrames.tag(frame)) {
+        if (processing.contains('indexed:$id')) {
+          throw StateError('Previous BLE command is still running');
+        }
+        session.response = null;
+        session.selected = 0;
+      }
+      final message = session.assembly.add(frame);
+      if (message != null) processing.add('indexed:$id');
+      await peripheral.respondWriteRequest(e.request);
+      acknowledged = true;
+      if (message == null) return;
+      try {
+        final request = Map<String, dynamic>.from(
+          jsonDecode(utf8.decode(message)),
+        );
+        final result = await handler(
+          request,
+        ).timeout(const Duration(seconds: 20));
+        var frameBytes = 20;
+        try {
+          frameBytes = (await peripheral.getMaximumNotifyLength(
+            e.central,
+          )).clamp(20, 180);
+        } catch (_) {}
+        session.response = BleFrames.encode(
+          canonical(result),
+          session.assembly.transfer!,
+          frameBytes: frameBytes,
+        );
+      } catch (_) {
+        session.response = BleFrames.encode(
+          utf8.encode('{"error":"Peer exchange rejected"}'),
+          session.assembly.transfer!,
+        );
+      } finally {
+        processing.remove('indexed:$id');
+      }
+    } catch (_) {
+      if (!acknowledged) {
+        try {
+          await peripheral.respondWriteRequestWithError(
+            e.request,
+            error: GATTError.unlikelyError,
+          );
+        } catch (_) {}
+      }
+      onEvent('Bluetooth exchange interrupted; saved packets will retry.');
     }
   }
 
@@ -295,16 +408,34 @@ class BleTransport implements PeerTransport {
       final services = await central
           .discoverGATT(p)
           .timeout(const Duration(seconds: 10));
-      final characteristic = services
+      final characteristics = services
           .firstWhere((s) => s.uuid == serviceId)
-          .characteristics
-          .firstWhere((c) => c.uuid == rpcId);
+          .characteristics;
+      final reliable = characteristics.any((c) => c.uuid == indexedRpcId);
+      final characteristic = characteristics.firstWhere(
+        (c) => c.uuid == (reliable ? indexedRpcId : rpcId),
+      );
+      var frameBytes = 20;
+      if (reliable && Platform.isAndroid) {
+        try {
+          final mtu = await central
+              .requestMTU(p, mtu: 185)
+              .timeout(const Duration(seconds: 4));
+          frameBytes = (mtu - 3).clamp(20, 180);
+        } catch (_) {
+          // Minimum-MTU operation remains correct on devices that refuse MTU negotiation.
+        }
+      }
       Future<Json> rpc(Json request) async {
         final wire = canonical(request);
         if (wire.length > maxRpcBytes) {
           throw const FormatException('RPC exceeds limit');
         }
-        for (final f in frames(wire)) {
+        final transfer = Random.secure().nextInt(1 << 32);
+        for (final f
+            in reliable
+                ? BleFrames.encode(wire, transfer, frameBytes: frameBytes)
+                : frames(wire)) {
           await central
               .writeCharacteristic(
                 p,
@@ -315,8 +446,19 @@ class BleTransport implements PeerTransport {
               .timeout(const Duration(seconds: 5));
         }
         final assembled = Assembly();
-        final deadline = DateTime.now().add(const Duration(seconds: 30));
+        final indexedAssembly = IndexedBleAssembly();
+        final deadline = DateTime.now().add(const Duration(seconds: 90));
         while (DateTime.now().isBefore(deadline)) {
+          if (reliable) {
+            await central
+                .writeCharacteristic(
+                  p,
+                  characteristic,
+                  value: BleFrames.select(transfer, indexedAssembly.nextIndex),
+                  type: GATTCharacteristicWriteType.withResponse,
+                )
+                .timeout(const Duration(seconds: 5));
+          }
           final f = await central
               .readCharacteristic(p, characteristic)
               .timeout(const Duration(seconds: 5));
@@ -324,7 +466,15 @@ class BleTransport implements PeerTransport {
             await Future<void>.delayed(const Duration(milliseconds: 100));
             continue;
           }
-          final done = assembled.add(f);
+          if (reliable &&
+              (f.length <= BleFrames.header ||
+                  BleFrames.tag(f) != transfer ||
+                  BleFrames.index(f) != indexedAssembly.nextIndex)) {
+            // A cached/repeated ATT read is harmless: select the same cursor again.
+            await Future<void>.delayed(const Duration(milliseconds: 30));
+            continue;
+          }
+          final done = reliable ? indexedAssembly.add(f) : assembled.add(f);
           if (done != null) {
             return Map<String, dynamic>.from(jsonDecode(utf8.decode(done)));
           }
@@ -367,6 +517,7 @@ class BleTransport implements PeerTransport {
     outgoing.clear();
     touched.clear();
     processing.clear();
+    indexed.clear();
     discovered.clear();
   }
 }

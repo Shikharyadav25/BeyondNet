@@ -1,6 +1,58 @@
-# Validation and source audit — updated 11 October 2026
+# Validation and source audit — updated 17 October 2026
 
-Current phone release: **1.3.4+11**, Android 10+. Current backend: Java 21+ / Spring Boot 4.1.1 / PostgreSQL, artifact `bank-1.3.3.jar`.
+Current phone release: **1.3.6+13**, Android 10+. Current backend: Java 21+ / Spring Boot 4.1.1 / PostgreSQL, artifact `bank-1.3.3.jar`.
+
+## Physical two-phone test and BLE framing — 17 October 2026
+
+Tested OPPO CPH2565 (Android 15) as payer and OPPO CPH2127 (Android 12)
+as the online gateway. The gateway initially had 1.3.4; both phones were updated
+in place. Accounts, enrollment and history were retained. The bank and ngrok
+were started against the existing PostgreSQL bank. Payer Wi-Fi and mobile data
+were disabled; Android reported `Active default network: none` before and after
+the successful offline run.
+
+The initial physical exchange reproduced GATT read/timeouts and malformed JSON
+responses. Release 1.3.6 adds an indexed GATT characteristic with transfer tags,
+sequence checks and explicit response cursors. Repeated reads no longer consume
+response chunks. Duplicate identical writes do not append bytes or reexecute the
+handler. MTU negotiation reduces operation count on supported phones; native
+logs confirmed successful negotiation. The original characteristic remains for
+older peers. Interrupted read callbacks are caught rather than escaping as
+unhandled asynchronous exceptions, and a successful sync clears stale errors.
+
+The Nearby page now offers a payer connection only when the bank is unreachable
+and no incoming/forwarding request needs attention. Online gateways show approval
+controls without a redundant payer Connect button. Offline intermediates retain
+their dedicated next-phone controls. The installed gateway's pending invitation
+screen was inspected during the Krishna payment and contained Allow relay and
+Decline, with no Connect button.
+
+| Physical scenario | Observed result |
+|---|---|
+| Incorrect supplied payment PIN, offline Ajay to Ashwani | Signed bank rejection returned over BLE; no debit or credit. |
+| PIN reset through the normal authenticated app flow | Saved successfully; payer returned offline before authorizing another payment. |
+| Offline Ajay to Ashwani, INR 1 | Paid; reference `OK-614EBE60915F46CD`; exactly one debit and credit; signed receipt displayed while payer stayed offline. |
+| Offline Ajay to Krishna Enterprises, INR 1, final APK | Paid; payment ID `b8bc746f-0023-43cd-be58-0c39e75f880a`, reference `OK-8E171FDAA96546A5`; one debit of 100 paise and one credit of 100 paise; receipt verified on offline payer. |
+| Awaiting relay approval | Bank had no new decision or balance movement before approval. |
+| App update/restart | The earlier verified receipt and account state survived the in-place update. |
+
+The non-integration Flutter suite passed **93 tests** after the transport change.
+Three additional contextual-action widget regressions were then added; the
+targeted widget/framing/startup run passed **24 tests**, including those cases.
+Final Flutter analysis reported no issues. Release APK build and signing check
+passed with the existing signing identity. No bank financial code was changed.
+
+Limits: these are two specific physical phones, not a physical three/four-phone
+chain or an independent security certification. Intermittent Android GATT
+disconnects occurred during earlier sessions and retries recovered; this does
+not establish zero radio errors on all hardware. The foreground service stayed
+running with the gateway app backgrounded; notification-drawer visibility was
+not independently established. The Krishna recording contains actual phone
+screen captures; its condensed presentation version shortens waiting intervals.
+
+APK SHA-256: `5b52d4771a0667e21ed6804dffb55d260b9a263a02d6e669ec524bd947288c0d`.
+
+The release notes below are historical records of their stated versions.
 
 ## Security roadmap update — mobile 1.3.4
 

@@ -181,6 +181,67 @@ void main() {
     e.dispose();
   });
 
+  testWidgets(
+    'Online gateway only offers relay approval, not payer connection',
+    (tester) async {
+      final e = sample(online: true);
+      e.nearby = [
+        {'device_id': 'other', 'name': 'Alex', 'online': false},
+      ];
+      e.invitations = [
+        {'id': 'a' * 64, 'name': 'Alex'},
+      ];
+      await tester.pumpWidget(MaterialApp(home: Shell(engine: e)));
+      await tester.tap(find.text('Nearby'));
+      await tester.pump();
+      await scroll(tester, find.text('Allow relay'), 300);
+      expect(find.text('Allow relay'), findsOneWidget);
+      await scroll(tester, find.text('Alex'), 300);
+      expect(find.text('Connect for payment'), findsNothing);
+      expect(find.text('Connected · continue'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      e.dispose();
+    },
+  );
+
+  testWidgets('Offline helper shows forwarding actions, not payer connection', (
+    tester,
+  ) async {
+    final e = sample();
+    e.nearby = [
+      {'device_id': 'next', 'name': 'Alex', 'online': true},
+    ];
+    e.relayQueue = [
+      {'id': 'a' * 64, 'source': 'previous', 'next_peer': null},
+    ];
+    await tester.pumpWidget(MaterialApp(home: Shell(engine: e)));
+    await tester.tap(find.text('Nearby'));
+    await tester.pump();
+    await scroll(tester, find.text('Request Alex · internet on'), 300);
+    expect(find.text('Request Alex · internet on'), findsOneWidget);
+    await scroll(tester, find.text('Alex'), 300);
+    expect(find.text('Connect for payment'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    e.dispose();
+  });
+
+  testWidgets('Offline payer can select a relay for its own payment', (
+    tester,
+  ) async {
+    final e = sample();
+    e.nearby = [
+      {'device_id': 'next', 'name': 'Alex', 'online': true},
+    ];
+    await tester.pumpWidget(MaterialApp(home: Shell(engine: e)));
+    await tester.tap(find.text('Nearby'));
+    await tester.pump();
+    await scroll(tester, find.text('Connect for payment'), 300);
+    expect(find.text('Connect for payment'), findsOneWidget);
+    expect(find.text('Allow relay'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    e.dispose();
+  });
+
   testWidgets('Merchant has receive-first home and can add demo money', (
     tester,
   ) async {

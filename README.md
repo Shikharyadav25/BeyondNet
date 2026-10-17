@@ -6,7 +6,7 @@ BeyondNet is an Android payment proof of concept for environments with unreliabl
 
 | Mobile release | Bank release | Supported platform | Payment environment |
 | --- | --- | --- | --- |
-| **1.3.5 · build 12** | **1.3.3** | **Android 10+** | **Simulated INR** |
+| **1.3.6 · build 13** | **1.3.3** | **Android 10+** | **Simulated INR** |
 
 > BeyondNet uses demo funds and has no real UPI or banking integration. Payment initiation can happen offline; final settlement requires an internet-connected gateway to reach the bank.
 
@@ -92,11 +92,11 @@ The authorization window is **10 minutes**, not a processing delay. Reachable re
 | Settlement | Funds preflight, unresolved-payment reservations, atomic debit/credit entries, duplicate recovery and bank-enforced balance checks |
 | Operator console | Local authenticated overview, payment decisions, ledger, enrollment QR and labelled software rehearsal |
 
-### Latest release: 1.3.5
+### Latest release: 1.3.6
 
-Mobile 1.3.5 adds saved relay invitations and explicit approval at each hop, route selection for offline relays, direct bank receipt recovery when the sender returns online, and more resilient Bluetooth scanning and connection retries. The 1.3.4 persistent Bluetooth command replay protection remains in place.
+Mobile 1.3.6 adds numbered Bluetooth frames with explicit response cursors, so repeated reads do not consume chunks or mix successive responses. Negotiated MTU support reduces radio operations on capable phones, while a minimum-MTU fallback and the original characteristic retain compatibility. Relay approvals, offline route selection, direct receipt recovery and persistent command replay protection remain in place.
 
-Install over the existing app on every participating phone to preserve enrollment and queued payments. The bank needs no restart or URL/fingerprint change. Earlier APKs can still exchange packets through the legacy route, but they do not provide the new approval flow; use 1.3.5 on all demo phones.
+Install over the existing app on every participating phone to preserve enrollment and queued payments. The bank needs no restart or URL/fingerprint change. Earlier APKs can still exchange packets through the legacy transport; versions before 1.3.5 do not provide the approval flow. Use 1.3.6 on all demo phones.
 
 See the [security roadmap](docs/SECURITY_ROADMAP.md) and [previous bank improvements](docs/REVIEW_IMPROVEMENTS.md).
 
@@ -176,7 +176,7 @@ Keep the bank and tunnel running, and the laptop awake and online during testing
 
 ### 3. Install and enroll the phones
 
-Download [BeyondNet Android 1.3.5](installers/BeyondNet-Android-1.3.5.apk) onto each Android 10+ phone, or build from source below. Update existing installations in place to preserve keys and queued payments.
+Download [BeyondNet Android 1.3.6](installers/BeyondNet-Android-1.3.6.apk) onto each Android 10+ phone, or build from source below. Update existing installations in place to preserve keys and queued payments.
 
 1. While online, scan the bank QR or select its image from the gallery.
 2. Create Personal and Merchant accounts with unique IDs ending in `@beyondnet` and passwords of at least eight characters.

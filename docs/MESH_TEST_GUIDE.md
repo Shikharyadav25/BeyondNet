@@ -1,6 +1,6 @@
-# Physical mesh demo: release 1.3.5
+# Physical mesh demo: release 1.3.6
 
-Use the same 1.3.5 APK on every Android phone. Earlier APKs can still exchange the bank packet format, but their automatic relay behavior does not support the new approval flow.
+Use the same 1.3.6 APK on every Android phone. This release adds indexed Bluetooth response reads so repeated reads cannot consume or mix chunks, plus negotiated MTU support. The bank packet format is unchanged. Older peers use the original BLE characteristic; versions before 1.3.5 do not support the approval flow.
 
 ## Before turning internet off
 

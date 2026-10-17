@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:beyondnet/android_ble_session.dart';
+import 'package:beyondnet/ble_frames.dart';
 import 'package:beyondnet/ble_transport.dart';
 import 'package:bluetooth_low_energy/bluetooth_low_energy.dart';
 import 'package:flutter/services.dart';
@@ -34,6 +36,24 @@ class FakePeer implements Peripheral {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+class FakeRemoteCentral implements Central {
+  @override
+  final uuid = UUID.fromString('22345678-1234-1234-1234-123456789abc');
+}
+
+class FakeWrite implements GATTWriteRequest {
+  @override
+  final Uint8List value;
+  FakeWrite(this.value);
+  @override
+  int get offset => 0;
+}
+
+class FakeRead implements GATTReadRequest {
+  @override
+  int get offset => 0;
+}
+
 class FakePeripheral implements PeripheralManager {
   final writes =
       StreamController<GATTCharacteristicWriteRequestedEventArgs>.broadcast();
@@ -41,6 +61,25 @@ class FakePeripheral implements PeripheralManager {
       StreamController<GATTCharacteristicReadRequestedEventArgs>.broadcast();
   BluetoothLowEnergyState currentState = BluetoothLowEnergyState.poweredOn;
   int failedAdds = 0, adds = 0, advertisements = 0;
+  int writeAcks = 0;
+  bool failReadResponse = false;
+  final responses = <Uint8List>[];
+  @override
+  Future<int> getMaximumNotifyLength(Central central) async => 180;
+  @override
+  Future<void> respondWriteRequest(GATTWriteRequest request) async {
+    writeAcks++;
+  }
+
+  @override
+  Future<void> respondReadRequestWithValue(
+    GATTReadRequest request, {
+    required Uint8List value,
+  }) async {
+    if (failReadResponse) throw StateError('Disconnected');
+    responses.add(Uint8List.fromList(value));
+  }
+
   @override
   BluetoothLowEnergyState get state => currentState;
   @override
@@ -207,6 +246,99 @@ void main() {
       );
       expect(radio.running, isFalse);
       expect(calls, isEmpty);
+    },
+  );
+  test(
+    'indexed GATT handler tolerates repeated reads and final writes',
+    () async {
+      var executions = 0;
+      radio = BleTransport(
+        (request) async {
+          executions++;
+          return {'reply': List.filled(400, 'x').join()};
+        },
+        (_) {},
+        central: central,
+        peripheral: peripheral,
+        androidSession: AndroidBleSession(),
+      );
+      await radio.start();
+      final remote = FakeRemoteCentral();
+      final characteristic = GATTCharacteristic.mutable(
+        uuid: indexedRpcId,
+        properties: [
+          GATTCharacteristicProperty.read,
+          GATTCharacteristicProperty.write,
+        ],
+        permissions: [
+          GATTCharacteristicPermission.read,
+          GATTCharacteristicPermission.write,
+        ],
+        descriptors: [],
+      );
+      Future<void> write(Uint8List bytes) async {
+        peripheral.writes.add(
+          GATTCharacteristicWriteRequestedEventArgs(
+            remote,
+            characteristic,
+            FakeWrite(bytes),
+          ),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+
+      Future<Uint8List> read() async {
+        peripheral.reads.add(
+          GATTCharacteristicReadRequestedEventArgs(
+            remote,
+            characteristic,
+            FakeRead(),
+          ),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        return peripheral.responses.last;
+      }
+
+      final request = BleFrames.encode(
+        utf8.encode('{"command":"inventory"}'),
+        42,
+      );
+      for (final part in request) {
+        await write(part);
+      }
+      await write(request.last);
+      expect(executions, 1);
+      await write(BleFrames.select(42, 0));
+      final first = await read();
+      expect(await read(), first);
+      await write(BleFrames.select(42, 1));
+      expect(BleFrames.index(await read()), 1);
+      // A new transfer cannot accidentally expose the previous response.
+      final next = BleFrames.encode(utf8.encode('{"command":"inventory"}'), 43);
+      await write(next.first);
+      expect(await read(), [0]);
+      expect(executions, 1);
+    },
+  );
+  test(
+    'read invalidated by disconnect does not escape the stream handler',
+    () async {
+      await radio.start();
+      peripheral.failReadResponse = true;
+      peripheral.reads.add(
+        GATTCharacteristicReadRequestedEventArgs(
+          FakeRemoteCentral(),
+          GATTCharacteristic.mutable(
+            uuid: rpcId,
+            properties: [GATTCharacteristicProperty.read],
+            permissions: [GATTCharacteristicPermission.read],
+            descriptors: [],
+          ),
+          FakeRead(),
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(radio.running, isTrue);
     },
   );
 }
