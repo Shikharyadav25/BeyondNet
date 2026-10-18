@@ -30,7 +30,9 @@ public class RequestLimits extends OncePerRequestFilter {
   }
 
   static String route(String path) {
-    return path.replaceFirst("^(/api/(mailbox|receipts|recipients))/[^/]+$", "$1/{id}")
+    return path.replaceFirst("^(/api/gateway/mailbox)/[^/]+$", "$1/{id}")
+        .replaceFirst("^(/api/admin/gateways)/[^/]+/revoke$", "$1/{id}/revoke")
+        .replaceFirst("^(/api/(mailbox|receipts|recipients))/[^/]+$", "$1/{id}")
         .replaceFirst("^(/api/admin/revoke)/[^/]+$", "$1/{id}");
   }
 

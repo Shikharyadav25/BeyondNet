@@ -19,8 +19,8 @@ String code({String url = 'https://bank.example/', String? fingerprint}) =>
     });
 Future<void> reveal(WidgetTester tester, String text) =>
     tester.scrollUntilVisible(
-      find.text(text),
-      180,
+      find.text(text).hitTestable(),
+      120,
       scrollable: find
           .descendant(
             of: find.byType(ListView).first,

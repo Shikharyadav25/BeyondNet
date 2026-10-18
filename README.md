@@ -1,5 +1,7 @@
 # BeyondNet
 
+> **Campus transition branch:** Android 1.4.0 adds separate campus setup, signed public search and an offline public cache. Content starts empty pending institutional approval. Linux gateway components are libraries; a working BlueZ gateway and messaging are not yet implemented. See the [implementation status](docs/campus/IMPLEMENTATION.md), [setup](docs/campus/SETUP.md) and [acceptance gates](docs/campus/ACCEPTANCE.md). The payment-release documentation below describes the preserved baseline.
+
 **Initiate payments offline. Carry encrypted requests through nearby phones. Settle when a gateway reaches the bank.**
 
 BeyondNet is an Android payment proof of concept for environments with unreliable internet access. An offline phone sends a signed, encrypted payment request through a chain of enrolled Bluetooth devices. A phone with internet submits it to the Java demo bank, which records the outcome in PostgreSQL and returns a signed receipt through the available network.

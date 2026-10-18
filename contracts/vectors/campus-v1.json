@@ -1,0 +1,31 @@
+{
+  "public_key": "MCowBQYDK2VwAyEAA6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+  "body": {
+    "v": 1,
+    "kind": "search_result",
+    "request_id": "00000000-0000-4000-8000-000000000001",
+    "query": "library पुस्तकालय",
+    "page": 0,
+    "created_at": 100,
+    "expires_at": 160,
+    "results": [],
+    "has_more": false,
+    "source": "campus_backend"
+  },
+  "canonical": "{\"created_at\":100,\"expires_at\":160,\"has_more\":false,\"kind\":\"search_result\",\"page\":0,\"query\":\"library पुस्तकालय\",\"request_id\":\"00000000-0000-4000-8000-000000000001\",\"results\":[],\"source\":\"campus_backend\",\"v\":1}",
+  "signed": {
+    "body": {
+      "v": 1,
+      "kind": "search_result",
+      "request_id": "00000000-0000-4000-8000-000000000001",
+      "query": "library पुस्तकालय",
+      "page": 0,
+      "created_at": 100,
+      "expires_at": 160,
+      "results": [],
+      "has_more": false,
+      "source": "campus_backend"
+    },
+    "signature": "wh5SjqVnZhjisVJ7IooV+P7Vq0oby4OvkxCMFB6bsy0KMdHxF0CETmPVLVp5jGnTe25Ibg526oBgqfO24xJLCg=="
+  }
+}

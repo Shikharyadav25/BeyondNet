@@ -101,6 +101,32 @@ public class BankController {
     return bank.inbox(bank.account(h), id, after);
   }
 
+  @PostMapping("/api/gateway/packets")
+  public Object gatewayIngest(@RequestHeader(value = "Authorization", required = false) String h,
+      @RequestBody Map<String, Object> body) {
+    bank.gateway(h);
+    return bank.ingest(body);
+  }
+
+  @GetMapping("/api/gateway/mailbox/{cap}")
+  public Object gatewayMailbox(@RequestHeader(value = "Authorization", required = false) String h, @PathVariable String cap) {
+    bank.gateway(h);
+    return bank.mailbox(cap);
+  }
+
+  @PostMapping("/api/admin/gateways")
+  public Object provisionGateway(@RequestHeader(value = "Authorization", required = false) String h,
+      @RequestBody Map<String, Object> body) {
+    bank.admin(h);
+    return bank.provisionGateway(body);
+  }
+
+  @PostMapping("/api/admin/gateways/{id}/revoke")
+  public Object revokeGateway(@RequestHeader(value = "Authorization", required = false) String h, @PathVariable String id) {
+    bank.admin(h);
+    return bank.revokeGateway(id);
+  }
+
   @PostMapping(value = "/api/admin/setup-qr", produces = "image/png")
   public byte[] setupQr(
       @RequestHeader(value = "Authorization", required = false) String h,
