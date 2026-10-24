@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Approved public campus records",
+  "type": "array", "maxItems": 50,
+  "items": {
+    "type": "object", "additionalProperties": false,
+    "required": ["id", "title", "body", "source", "updated_at", "expires_at"],
+    "properties": {
+      "id": {"type": "string", "minLength": 1, "maxLength": 80},
+      "title": {"type": "string", "minLength": 1, "maxLength": 120},
+      "body": {"type": "string", "minLength": 1, "maxLength": 600},
+      "source": {"type": "string", "minLength": 1, "maxLength": 120},
+      "updated_at": {"type": "integer", "minimum": 0},
+      "expires_at": {"type": "integer", "minimum": 1}
+    }
+  },
+  "$comment": "Runtime additionally enforces UTF-8 byte limits, unique IDs, nonblank text and valid publication/expiry times."
+}

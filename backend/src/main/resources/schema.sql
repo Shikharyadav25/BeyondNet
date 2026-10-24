@@ -29,3 +29,8 @@ CREATE INDEX IF NOT EXISTS ledger_account_revision ON ledger(account,id);
 CREATE INDEX IF NOT EXISTS receipt_expiry ON device_receipts(expiry);
 CREATE INDEX IF NOT EXISTS session_expiry ON sessions(expiry);
 CREATE INDEX IF NOT EXISTS event_retention ON events(at);
+
+CREATE TABLE IF NOT EXISTS gateway_principals (
+ id TEXT PRIMARY KEY, token_hash TEXT UNIQUE NOT NULL,
+ expires_at BIGINT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0
+);

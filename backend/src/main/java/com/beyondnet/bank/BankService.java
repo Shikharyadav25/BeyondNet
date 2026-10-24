@@ -165,6 +165,41 @@ public class BankService {
     return "sha256:" + hash(token.getBytes(java.nio.charset.StandardCharsets.UTF_8));
   }
 
+  /** A managed gateway may submit ciphertext and recover capability-addressed receipts only. */
+  public String gateway(String header) {
+    return db.read(c -> {
+      var principal = one(c, "SELECT id FROM gateway_principals WHERE token_hash=? AND expires_at>? AND revoked=0",
+          sessionHash(bearer(header)), now());
+      if (principal == null) throw new BankException(401, "Gateway credential expired or revoked");
+      return (String) principal.get("id");
+    });
+  }
+
+  public Map<String, Object> provisionGateway(Map<String, Object> body) {
+    String id = text(body, "id", 1, 80);
+    if (!id.matches("[a-zA-Z0-9_-]+")) throw new BankException(422, "Invalid gateway ID");
+    long expiry = amount(body, "expires_at", now() + 60, now() + 31L * 86400);
+    String credential = token();
+    db.tx(c -> {
+      update(c, "INSERT INTO gateway_principals(id,token_hash,expires_at,revoked) VALUES(?,?,?,0) "
+          + "ON CONFLICT(id) DO UPDATE SET token_hash=excluded.token_hash,expires_at=excluded.expires_at,revoked=0",
+          id, sessionHash(credential), expiry);
+      event(c, "gateway_provisioned", map("id", id, "expires_at", expiry));
+      return null;
+    });
+    return map("id", id, "token", credential, "expires_at", expiry,
+        "permissions", List.of("packet:submit", "mailbox:recover"));
+  }
+
+  public Map<String, Object> revokeGateway(String id) {
+    db.tx(c -> {
+      update(c, "UPDATE gateway_principals SET revoked=1 WHERE id=?", id);
+      event(c, "gateway_revoked", map("id", id));
+      return null;
+    });
+    return map("revoked", true);
+  }
+
   private String pinHash(String pin, byte[] salt) {
     try {
       var hmac = javax.crypto.Mac.getInstance("HmacSHA256");
