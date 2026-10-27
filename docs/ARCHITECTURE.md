@@ -100,9 +100,9 @@ Signing inside the small demo transaction removes the need for a separate outbox
 
 ## Persistence and restart
 
-Bank identity lives under `data/` (or `KARO_DATA_DIR`); this deployment stores its PostgreSQL ledger on Neon. Phone intents/ciphertext/custody ACKs live in SQLite; key seeds and login session use secure storage. One application-scoped Flutter engine is retained by the enabled Android foreground service, independently of Activity attachment. Restart restores prior opt-in and cached signed receipts. Notification Stop persists opt-out; Bluetooth-off pauses, on resumes. There is no boot receiver; reopen after reboot/force-stop. Physical-device background acceptance remains required. See [BACKGROUND_RELAY.md](BACKGROUND_RELAY.md).
+Bank identity lives under `data/` (or `KARO_DATA_DIR`); PostgreSQL may run locally or on a hosted service. Phone intents/ciphertext/custody ACKs live in SQLite; key seeds and login session use secure storage. One application-scoped Flutter engine is retained by the enabled Android foreground service, independently of Activity attachment. Restart restores prior opt-in and cached signed receipts. Notification Stop persists opt-out; Bluetooth-off pauses, on resumes. There is no boot receiver; reopen after reboot/force-stop. Physical-device background acceptance remains required. See [BACKGROUND_RELAY.md](BACKGROUND_RELAY.md).
 
-Receipts live for seven days; new requests are authorized for 10 minutes. Expired payment packets remain cached for seven more days to support mailbox recovery, but are no longer submitted as new authorizations or forwarded. Permanent own payment history is preserved. There is no automatic cancellation or refund feature.
+Receipt delivery packets live for seven days; a verified replay can refresh delivery of a saved decision without authorizing a new payment. New requests are authorized for 10 minutes. Expired relay payment packets remain cached for seven more days. Original unresolved owned requests are retained until reconciliation; they can be submitted only to recover a saved decision or obtain a signed expiry rejection, and are not forwarded as new authorizations. Permanent own payment history is preserved. There is no automatic cancellation or refund feature.
 
 ## Observability
 

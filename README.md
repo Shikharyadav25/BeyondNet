@@ -6,7 +6,7 @@ BeyondNet is an Android payment proof of concept for environments with unreliabl
 
 | Mobile release | Bank release | Supported platform | Payment environment |
 | --- | --- | --- | --- |
-| **1.3.6 · build 13** | **1.3.3** | **Android 10+** | **Simulated INR** |
+| **1.4.2 · build 16** | **1.3.3** | **Android 10+** | **Simulated INR** |
 
 > BeyondNet uses demo funds and has no real UPI or banking integration. Payment initiation can happen offline; final settlement requires an internet-connected gateway to reach the bank.
 
@@ -42,7 +42,7 @@ flowchart LR
 
 - **Discovered topology:** two phones work without an intermediate relay; additional offline phones can form a chain, bounded by the four-hop limit.
 - **Ciphertext forwarding:** payment instructions and the demo PIN are encrypted for the bank. Relaying does not authorize a debit.
-- **Internet-only bank:** the bank never joins Bluetooth and need not be near the phones. The current deployment runs on a laptop with hosted Neon PostgreSQL; local PostgreSQL is also supported.
+- **Internet-only bank:** the bank never joins Bluetooth and need not be near the phones. The bank runs on a laptop or server with local or hosted PostgreSQL.
 - **Receipt recovery:** the bank saves a signed outcome for the sender's registered device. When that phone regains internet, it receives the outcome through WebSocket or fetches it through HTTPS, without needing the relay chain to remain intact.
 
 ### Payment flow
@@ -92,13 +92,15 @@ The authorization window is **10 minutes**, not a processing delay. Reachable re
 | Settlement | Funds preflight, unresolved-payment reservations, atomic debit/credit entries, duplicate recovery and bank-enforced balance checks |
 | Operator console | Local authenticated overview, payment decisions, ledger, enrollment QR and labelled software rehearsal |
 
-### Latest release: 1.3.6
+### Latest release: 1.4.2
 
-Mobile 1.3.6 adds numbered Bluetooth frames with explicit response cursors, so repeated reads do not consume chunks or mix successive responses. Negotiated MTU support reduces radio operations on capable phones, while a minimum-MTU fallback and the original characteristic retain compatibility. Relay approvals, offline route selection, direct receipt recovery and persistent command replay protection remain in place.
+This payment-only release fixes the audited receipt-recovery, relay-capacity and peer-response bugs. A saved paid or rejected decision can be delivered again after its original receipt expires, with no second debit or changed financial outcome. Expired invitations stop consuming capacity. Nearby replies are checked against the selected peer, authenticated inventory and requested packet.
 
-Install over the existing app on every participating phone to preserve enrollment and queued payments. The bank needs no restart or URL/fingerprint change. Earlier APKs can still exchange packets through the legacy transport; versions before 1.3.5 do not provide the approval flow. Use 1.3.6 on all demo phones.
+Signup now explains connection failures, stops its progress indicator on error and offers sign-in to safely finish partially completed enrollment. Existing account details and device keys are retained. Independent integration cleanup uses the Python PostgreSQL driver on supported host architectures.
 
-See the [security roadmap](docs/SECURITY_ROADMAP.md) and [previous bank improvements](docs/REVIEW_IMPROVEMENTS.md).
+Install the update **over the existing app** on every participating phone; do not uninstall. Version code 16 upgrades the earlier 1.3.6, 1.4.0 and 1.4.1 builds. **Restart the bank with this release's backend** to enable refreshed receipt delivery. The app ID, signing identity and payment wire format remain compatible. The bank URL and fingerprint need not change.
+
+See [release validation and acceptance steps](docs/RELEASE_1.4.2.md) and the [security roadmap](docs/SECURITY_ROADMAP.md).
 
 ## Tech stack
 
@@ -176,7 +178,7 @@ Keep the bank and tunnel running, and the laptop awake and online during testing
 
 ### 3. Install and enroll the phones
 
-Download [BeyondNet Android 1.3.6](installers/BeyondNet-Android-1.3.6.apk) onto each Android 10+ phone, or build from source below. Update existing installations in place to preserve keys and queued payments.
+Download [BeyondNet Android 1.4.2](installers/BeyondNet-Android-1.4.2.apk) onto each Android 10+ phone, or build from source below. Update existing installations in place to preserve keys and queued payments.
 
 1. While online, scan the bank QR or select its image from the gallery.
 2. Create Personal and Merchant accounts with unique IDs ending in `@beyondnet` and passwords of at least eight characters.
@@ -222,7 +224,7 @@ From the repository root, build and test Java against configured PostgreSQL:
 mvn -f backend/pom.xml package
 ```
 
-For full project checks:
+For full project checks, first start the configured PostgreSQL database. An explicit database URL or existing configuration is reused; the checker only initializes a default local cluster on a fresh setup:
 
 ```sh
 python3 -m venv .venv
@@ -230,7 +232,7 @@ python3 -m venv .venv
 ./scripts/check.sh
 ```
 
-Integration checks use temporary identities and isolated PostgreSQL schemas. The latest mobile audit passed the full 84-test suite, including Dart-to-Java/PostgreSQL integration; all six targeted replay tests passed after adding the global-capacity regression. Static analysis, APK build and signature checks passed. Exact scope, earlier Java/native results and physical-test gaps are in [validation](docs/VALIDATION.md).
+Integration checks use temporary identities and isolated PostgreSQL schemas. The current release's results, audit regression tests, Android artifact identity and physical-test limits are recorded in [release validation](docs/RELEASE_1.4.2.md). Earlier dated results remain in [historical validation](docs/VALIDATION.md).
 
 ## Project structure
 

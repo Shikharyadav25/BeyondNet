@@ -2,8 +2,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . ./scripts/database-config.sh
-if bank_database_is_local; then ./scripts/start-postgres.sh; fi
 export BEYONDNET_DB_CONFIG="${BEYONDNET_DB_CONFIG:-$PWD/data/postgres.properties}"
+# An explicit database may be a disposable instance or a custom local port.
+# Only bootstrap our default cluster when no database was configured at all.
+if [ -z "${BEYONDNET_DB_URL:-}" ] && [ ! -f "$BEYONDNET_DB_CONFIG" ] && bank_database_is_local; then
+  ./scripts/start-postgres.sh
+fi
 mvn -q -f backend/pom.xml package
 FLUTTER_BIN="${FLUTTER_BIN:-flutter}"
 if ! command -v "$FLUTTER_BIN" >/dev/null 2>&1; then

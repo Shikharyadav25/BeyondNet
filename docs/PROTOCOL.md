@@ -137,7 +137,7 @@ Sync exchanges inventories, pulls up to eight missing packets, and pushes up to 
 ## Retention
 
 - New payment authorization: 10 minutes (600 seconds); saved legacy decisions remain recoverable.
-- Receipt propagation: 7 days from bank decision.
+- Receipt propagation: 7 days per delivery copy; replay of the original signed request can refresh delivery of a stored decision.
 - Expired packet cache: retained for a further 7 days for recovery, bounded by storage capacity.
 - Own intent and receipt history: retained until app data is removed.
 - Device certificates: 30 days; renewal is online.
@@ -160,9 +160,15 @@ BLE inventory responses add an advisory `online` boolean. `resolve` with `accoun
 
 `POST /api/pin` requires an account session and `{password,pin}` to set/reset a six-digit demo PIN. Account snapshots include `pin_configured`. Five distinct incorrect PIN requests temporarily lock payment authorization for ten minutes; repeating one request recovers the same rejection without consuming more attempts.
 
-The bank uses PostgreSQL, one transaction per decision and a transaction-scoped per-bank advisory lock. First submissions after the signed 600-second deadline are rejected. Duplicate lookup precedes expiry/PIN decisions, so already-committed requests retain their original encrypted receipts. A changed body with the same sender/payment ID conflicts. New v1 PIN-less payments are rejected; previously stored v1 decisions remain recoverable after migration. Phone SQLite continues storing offline queues; PIN is omitted from local intent/history.
+The bank uses PostgreSQL, one transaction per decision and a transaction-scoped per-bank advisory lock. First submissions after the signed 600-second deadline are rejected. Duplicate lookup precedes expiry/PIN decisions, so already-committed requests retain their original financial outcome. Unexpired receipt copies are returned unchanged. Expired copies are refreshed under the same transaction, with fresh encryption and transport expiry but the same payment identity, amount, outcome, reference and original commit time. Current balance snapshots carry their current ledger revision; refreshing delivery never inserts a ledger entry or debits again. A changed body with the same sender/payment ID conflicts. New v1 PIN-less payments are rejected; previously stored v1 decisions remain recoverable after migration. Phone SQLite continues storing offline queues; PIN is omitted from local intent/history.
 
 
 ## Bank setup QR
 
 Setup QRs encode public JSON: `{"type":"beyondnet-bank-setup","v":1,"bank_url":"https://bank.example","fingerprint":"<64 hex characters>"}`. These are distinct from recipient payment QRs and contain no account secrets. The app accepts only an HTTPS origin without credentials, paths, query or fragments and a valid full fingerprint. Camera and selected-image paths share the same parser and review step. Enrollment verifies actual bank key material against the imported fingerprint before sending signup/login credentials. The operator-authenticated `POST /api/admin/setup-qr` accepts `bank_url` and generates a PNG using the bank's own fingerprint, never a client-supplied fingerprint.
+
+## Payment-only 1.4.2 peer and enrollment checks
+
+Subsequent RPC replies must match the peer's bank-certified device/account/mesh and signing/encryption keys from the first exchange. A previously selected device must also match the first response. Inventory `device_id` must match that authenticated identity, and `get(id)` must return exactly that packet ID before storage or acknowledgment. Expired pending invitations are transitioned to expired and excluded from active invitation limits.
+
+Account creation and initial device enrollment require internet. A failed health probe sends no account credentials. An unconfirmed signup may have committed; the UI offers explicit sign-in with the same credentials to finish enrollment without automatically repeating signup. Device enrollment retries retain the stored device keys.

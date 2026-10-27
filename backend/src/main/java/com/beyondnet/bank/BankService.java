@@ -538,6 +538,11 @@ public class BankService {
             if (!previous.startsWith("hmac:"))
               update(c, "UPDATE payments SET hash=? WHERE sender=? AND id=?",
                   requestHash, body.get("sender"), body.get("payment_id"));
+            List<?> savedReceipts = JSON.readValue((String) existing.get("receipts"), List.class);
+            if (savedReceipts.stream().anyMatch(value ->
+                integer(object(value).get("expires_at")) <= now())) {
+              savedReceipts = refreshDecisionReceipts(c, existing, body, packet);
+            }
             event(
                 c,
                 "duplicate_recovered",
@@ -546,7 +551,7 @@ public class BankService {
                 "duplicate",
                 true,
                 "receipts",
-                JSON.readValue((String) existing.get("receipts"), List.class));
+                savedReceipts);
           }
           Map<String, Object> d =
               one(c, "SELECT * FROM devices WHERE id=?", body.get("device_id"));
@@ -693,6 +698,50 @@ public class BankService {
                   ref));
           return map("duplicate", false, "receipts", receipts);
         });
+  }
+
+  /** Refresh delivery of a durable outcome, never the payment authorization or ledger. */
+  private List<Map<String, Object>> refreshDecisionReceipts(
+      Connection c, Map<String, Object> decision, Map<String, Object> body,
+      Map<String, Object> request) throws Exception {
+    Map<String, Object> sender = one(c, "SELECT * FROM devices WHERE id=?", body.get("device_id"));
+    if (sender == null) throw new BankException(409, "Original sender device is unavailable");
+    List<Map<String, Object>> targets = new ArrayList<>();
+    targets.add(sender);
+    targets.addAll(rows(c, "SELECT * FROM devices WHERE account=? AND revoked=0",
+        decision.get("recipient")));
+    List<Object> reverse = new ArrayList<>((List<?>) request.get("path"));
+    Collections.reverse(reverse);
+    long expiry = now() + 7 * 86400;
+    List<Map<String, Object>> receipts = new ArrayList<>();
+    for (Map<String, Object> device : targets) {
+      Map<String, Object> account = snapshot(c, (String) device.get("account"));
+      Map<String, Object> outcome = sign(signing, map(
+          "v", 1, "payment_id", decision.get("id"), "sender", decision.get("sender"),
+          "recipient", decision.get("recipient"), "amount", integer(decision.get("amount")),
+          "currency", "INR", "status", decision.get("status"), "reason", decision.get("reason"),
+          "bank_ref", decision.get("bank_ref"), "committed_at", integer(decision.get("committed")),
+          "device_id", device.get("id"), "balance", account.get("balance"),
+          "balance_revision", account.get("revision")));
+      String cap = (String) body.get(device == sender ? "sender_mailbox" : "recipient_mailbox");
+      Map<String, Object> receipt = packet("receipt", seal((String) device.get("box_key"), outcome),
+          cap, expiry, reverse);
+      receipts.add(receipt);
+      update(c, "INSERT INTO device_receipts(device,packet_id,packet,expiry) VALUES(?,?,?,?)",
+          device.get("id"), receipt.get("id"), json(receipt), expiry);
+    }
+    update(c, "UPDATE payments SET receipts=? WHERE sender=? AND id=?", json(receipts),
+        decision.get("sender"), decision.get("id"));
+    for (String key : List.of("sender_mailbox", "recipient_mailbox")) {
+      String cap = (String) body.get(key);
+      List<Map<String, Object>> owned = key.equals("sender_mailbox") ? receipts :
+          receipts.stream().filter(value -> cap.equals(value.get("mailbox"))).toList();
+      update(c, "INSERT INTO mailboxes VALUES(?,?,?) ON CONFLICT(capability) DO UPDATE SET "
+          + "receipts=excluded.receipts,expiry=excluded.expiry", cap, json(owned), expiry);
+    }
+    event(c, "receipt_delivery_refreshed", map("payment_id", decision.get("id"),
+        "bank_ref", decision.get("bank_ref"), "status", decision.get("status")));
+    return receipts;
   }
 
   private String checkPin(Connection c, String aid, Map<String, Object> expected,

@@ -13,7 +13,7 @@ import httpx
 from websockets.sync.client import connect
 from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
 from scripts.test_postgres import environment, drop_schema
-from tests.support.wire_oracle import public, sign, seal, open_box, verify, packet, canonical
+from tests.support.wire_oracle import public, sign, seal, open_box, verify, packet, canonical, check_packet
 
 ROOT = Path(__file__).resolve().parents[1]
 JAR = ROOT / 'backend/target/bank-1.3.3.jar'
@@ -175,6 +175,11 @@ def test_java_imports_old_python_identity_passwords_and_completed_receipts(tmp_p
     with sqlite3.connect(tmp_path/'bank.sqlite3') as legacy:
         legacy.executescript(f['sqlite_sql'])
         legacy.execute('UPDATE sessions SET expiry=?',(int(time.time())+3600,))
+        legacy.row_factory = sqlite3.Row
+        old_decision = dict(legacy.execute(
+            'SELECT sender,id,recipient,amount,status,reason,bank_ref,committed FROM payments'
+        ).fetchone())
+        old_ledger_count = legacy.execute('SELECT COUNT(*) FROM ledger').fetchone()[0]
     p, original, fingerprint, token = f['packet'], f['response'], f['fingerprint'], f['operator_token']
     headers={'Authorization':f['session_token']}
     with socket.socket() as s:
@@ -191,7 +196,22 @@ def test_java_imports_old_python_identity_passwords_and_completed_receipts(tmp_p
             assert (tmp_path/'admin-token.txt').read_text().strip()==token
             c.post('/api/login',json={'account':'sam@beyondnet','password':'integration-password'}).raise_for_status()
             recovered=c.post('/api/packets',headers=headers,json=p)
-            assert recovered.json()['duplicate'] and recovered.json()['receipts']==original['receipts']
+            recovered.raise_for_status()
+            assert recovered.json()['duplicate']
+            if all(value['expires_at'] > int(time.time()) for value in original['receipts']):
+                assert recovered.json()['receipts'] == original['receipts']
+            else:
+                # Expired delivery copies are refreshed, while the imported
+                # financial decision and existing ledger remain unchanged.
+                for value in recovered.json()['receipts']:
+                    check_packet(value)
+                    assert value['expires_at'] > int(time.time())
+                state = c.get('/api/admin/state', headers={'Authorization': 'Bearer ' + token})
+                state.raise_for_status()
+                saved = next(value for value in state.json()['payments']
+                             if value['bank_ref'] == old_decision['bank_ref'])
+                assert {key: saved[key] for key in old_decision} == old_decision
+                assert len(state.json()['ledger']) == old_ledger_count
             assert c.get('/api/me',headers=headers).json()['account']['balance']==99000
     finally:
         process.terminate();process.wait(timeout=15)

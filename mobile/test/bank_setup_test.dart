@@ -28,8 +28,72 @@ Future<void> reveal(WidgetTester tester, String text) =>
           )
           .first,
     );
+
+class InterruptedEnrollmentEngine extends BeyondNetEngine {
+  @override
+  Future<void> enroll(
+    String url,
+    String id,
+    String password,
+    String fingerprint, {
+    String? name,
+    String? role,
+  }) async {
+    throw EnrollmentFailure(
+      'Account creation was not confirmed. Sign in to finish setup.',
+      resumeSignIn: true,
+    );
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  testWidgets(
+    'Partial signup switches to sign-in and keeps entered credentials',
+    (tester) async {
+      final engine = InterruptedEnrollmentEngine();
+      await tester.pumpWidget(MaterialApp(home: LoginPage(engine: engine)));
+      await reveal(tester, 'Payment ID');
+      final account = tester
+          .widget<TextField>(
+            find.byWidgetPredicate(
+              (widget) =>
+                  widget is TextField &&
+                  widget.decoration?.labelText == 'Payment ID',
+            ),
+          )
+          .controller!;
+      await reveal(tester, 'Password (at least 8 characters)');
+      final password = tester
+          .widget<TextField>(
+            find.byWidgetPredicate(
+              (widget) =>
+                  widget is TextField &&
+                  widget.decoration?.labelText ==
+                      'Password (at least 8 characters)',
+            ),
+          )
+          .controller!;
+      account.text = 'existing@beyondnet';
+      password.text = 'test-password';
+      await reveal(tester, 'Create account & continue');
+      await tester.tap(find.text('Create account & continue'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text(
+          'Account creation was not confirmed. Sign in to finish setup.',
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Got it'));
+      await tester.pumpAndSettle();
+      expect(find.text('Sign in securely'), findsOneWidget);
+      expect(account.text, 'existing@beyondnet');
+      expect(password.text, 'test-password');
+      await tester.pumpWidget(const SizedBox());
+      engine.dispose();
+    },
+  );
   test(
     'Setup payload contains both fields and normalizes a trailing slash',
     () {

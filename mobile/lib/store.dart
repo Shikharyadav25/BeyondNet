@@ -130,6 +130,13 @@ class LocalStore {
       throw StateError('Payment request expired');
     }
     return db.transaction((tx) async {
+      final clock = nowSeconds;
+      await tx.update(
+        'relay_invitations',
+        {'state': 'expired'},
+        where: "state='pending' AND expiry<=?",
+        whereArgs: [clock],
+      );
       if ((await tx.query(
         'packets',
         where: 'id=?',
@@ -145,13 +152,14 @@ class LocalStore {
       if (existing.isNotEmpty) return existing.single['state'] as String;
       final count = Sqflite.firstIntValue(
         await tx.rawQuery(
-          "SELECT COUNT(*) FROM relay_invitations WHERE state='pending'",
+          "SELECT COUNT(*) FROM relay_invitations WHERE state='pending' AND expiry>?",
+          [clock],
         ),
       )!;
       final fromPeer = Sqflite.firstIntValue(
         await tx.rawQuery(
-          "SELECT COUNT(*) FROM relay_invitations WHERE state='pending' AND source=?",
-          [source],
+          "SELECT COUNT(*) FROM relay_invitations WHERE state='pending' AND source=? AND expiry>?",
+          [source, clock],
         ),
       )!;
       if (count >= 40 || fromPeer >= 8) {
@@ -475,6 +483,12 @@ class LocalStore {
     'data': jsonEncode(cert),
   }, conflictAlgorithm: ConflictAlgorithm.replace);
   Future<void> cleanup() async {
+    await db.update(
+      'relay_invitations',
+      {'state': 'expired'},
+      where: "state='pending' AND expiry<=?",
+      whereArgs: [nowSeconds],
+    );
     await db.delete(
       'relay_invitations',
       where: 'expiry<?',

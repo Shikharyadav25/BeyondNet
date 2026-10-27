@@ -1,10 +1,10 @@
 """Only test helpers: isolated PostgreSQL schemas, never the public ledger."""
 import os
 from pathlib import Path
-import shutil
-import subprocess
 from urllib.parse import urlparse
 import uuid
+import psycopg
+from psycopg import sql
 ROOT=Path(__file__).resolve().parents[1]
 
 def environment():
@@ -19,9 +19,12 @@ def drop_schema(env):
     if path.exists():
         props=dict(line.split('=',1) for line in path.read_text().splitlines() if '=' in line and not line.startswith('#'))
     url=urlparse(env.get('BEYONDNET_DB_URL',props.get('url','jdbc:postgresql://127.0.0.1:5433/beyondnet')).removeprefix('jdbc:'))
-    # Prefer the modern client: system CA trust needs libpq 16+, and this Mac's PATH also has psql 14.
-    command=None
-    for directory in ['/opt/homebrew/opt/postgresql@18/bin','/usr/local/opt/postgresql@18/bin','/opt/homebrew/opt/postgresql@17/bin','/usr/local/opt/postgresql@17/bin']:
-        if Path(directory,'psql').exists():command=str(Path(directory,'psql'));break
-    if not command:command=shutil.which('psql')
-    subprocess.run([command,'-h',url.hostname,'-p',str(url.port or 5432),'-U',env.get('BEYONDNET_DB_USER',props.get('user','beyondnet')),'-d',url.path.lstrip('/'),'-v','ON_ERROR_STOP=1','-c',f'DROP SCHEMA IF EXISTS {schema} CASCADE'],env={**os.environ,'PGPASSWORD':env.get('BEYONDNET_DB_PASSWORD',props.get('password','')), **({'PGSSLMODE':'verify-full','PGSSLROOTCERT':'system'} if url.hostname not in {'localhost','127.0.0.1','::1'} else {})},check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    # Driver-based cleanup works on every supported host architecture.
+    options = dict(host=url.hostname, port=url.port or 5432,
+                   user=env.get('BEYONDNET_DB_USER', props.get('user', 'beyondnet')),
+                   password=env.get('BEYONDNET_DB_PASSWORD', props.get('password', '')),
+                   dbname=url.path.lstrip('/'), autocommit=True)
+    if url.hostname not in {'localhost', '127.0.0.1', '::1'}:
+        options.update(sslmode='verify-full', sslrootcert='system')
+    with psycopg.connect(**options) as connection:
+        connection.execute(sql.SQL('DROP SCHEMA IF EXISTS {} CASCADE').format(sql.Identifier(schema)))

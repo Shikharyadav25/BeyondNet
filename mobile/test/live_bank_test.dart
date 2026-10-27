@@ -36,16 +36,24 @@ class SimulatedRadio implements PeerTransport {
 class LoopbackClient extends http.BaseClient {
   final int port;
   final http.Client inner = http.Client();
-  LoopbackClient(this.port);
+  final String? loseFirstResponseOn;
+  bool responseLost = false;
+  LoopbackClient(this.port, {this.loseFirstResponseOn});
   @override
-  Future<http.StreamedResponse> send(http.BaseRequest request) {
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
     final redirected = http.Request(
       request.method,
       request.url.replace(scheme: 'http', host: '127.0.0.1', port: port),
     );
     redirected.headers.addAll(request.headers);
     if (request is http.Request) redirected.bodyBytes = request.bodyBytes;
-    return inner.send(redirected);
+    final response = await inner.send(redirected);
+    if (!responseLost && request.url.path == loseFirstResponseOn) {
+      responseLost = true;
+      await response.stream.drain<void>();
+      throw const SocketException('Test drops response after server commit');
+    }
+    return response;
   }
 
   @override
@@ -106,11 +114,15 @@ void main() {
           );
         }
 
-        Future<BeyondNetEngine> create(String id, String role) async {
+        Future<BeyondNetEngine> create(
+          String id,
+          String role, {
+          String? loseResponseOn,
+        }) async {
           FlutterSecureStorage.setMockInitialValues({});
           final e = BeyondNetEngine(
             transport: SimulatedRadio(),
-            client: LoopbackClient(port),
+            client: LoopbackClient(port, loseFirstResponseOn: loseResponseOn),
             authorizePayment: () async => true,
             socketConnector: (url) => WebSocket.connect(
               Uri.parse(
@@ -120,20 +132,52 @@ void main() {
           );
           nodes.add(e);
           await e.store.init(databasePath: '${dir.path}/$id.sqlite3');
+          if (loseResponseOn != null) {
+            await expectLater(
+              e.enroll(
+                'https://test.bank',
+                '$id@beyondnet',
+                'test-password',
+                setup['fingerprint'],
+                name: id,
+                role: role,
+              ),
+              throwsA(
+                isA<EnrollmentFailure>().having(
+                  (error) => error.resumeSignIn,
+                  'resume sign-in',
+                  isTrue,
+                ),
+              ),
+            );
+            expect(e.profile, isNull);
+          }
+          final savedKeys = await e.secure.read(key: 'device_keys');
           await e.enroll(
             'https://test.bank',
             '$id@beyondnet',
             'test-password',
             setup['fingerprint'],
-            name: id,
-            role: role,
+            name: loseResponseOn == null ? id : null,
+            role: loseResponseOn == null ? role : null,
           );
+          if (savedKeys != null) {
+            expect(await e.secure.read(key: 'device_keys'), savedKeys);
+          }
           await eventually(() => e.liveConnected && e.bankReachable);
           return e;
         }
 
-        final merchant = await create('shop', 'merchant');
-        final sender = await create('customer', 'customer');
+        final merchant = await create(
+          'shop',
+          'merchant',
+          loseResponseOn: '/api/devices',
+        );
+        final sender = await create(
+          'customer',
+          'customer',
+          loseResponseOn: '/api/signup',
+        );
         expect(sender.account!['balance'], 0);
         await sender.setPaymentPin('test-password', '123456');
         await sender.addDemoMoney(100000);
@@ -330,7 +374,11 @@ void main() {
             .setMockMethodCallHandler(BeyondNetEngine.platform, null);
         process.kill(ProcessSignal.sigterm);
         // Helper may spend 10s stopping Java, then remove its PostgreSQL schema.
-        await process.exitCode.timeout(const Duration(seconds: 20));
+        expect(
+          await process.exitCode.timeout(const Duration(seconds: 20)),
+          0,
+          reason: startupErrors.toString(),
+        );
         await lines.cancel();
         await errors.cancel();
         await dir.delete(recursive: true);

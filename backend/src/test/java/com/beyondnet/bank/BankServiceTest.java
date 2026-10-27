@@ -162,6 +162,68 @@ class BankServiceTest {
         });
   }
 
+  void expireDeliveryCopies(Map<String, Object> instruction) {
+    db.tx(c -> {
+      Map<String, Object> saved = one(c, "SELECT receipts FROM payments WHERE sender=? AND id=?",
+          payer, instruction.get("payment_id"));
+      List<Map<String, Object>> expired = new ArrayList<>();
+      for (Object value : JSON.readValue((String) saved.get("receipts"), List.class)) {
+        Map<String, Object> receipt = BankService.object(value);
+        expired.add(packet("receipt", BankService.object(receipt.get("box")),
+            (String) receipt.get("mailbox"), now() - 1, List.of()));
+      }
+      update(c, "UPDATE payments SET receipts=? WHERE sender=? AND id=?",
+          json(expired), payer, instruction.get("payment_id"));
+      update(c, "DELETE FROM mailboxes");
+      update(c, "DELETE FROM device_receipts");
+      return null;
+    });
+  }
+
+  @Test
+  void expiredPaidReceiptDeliveryRefreshesWithoutAnotherDebit() throws Exception {
+    Map<String, Object> instruction = body(1000), original = wrap(instruction);
+    Map<String, Object> first = receipt(bank.ingest(original));
+    long entries = db.read(c -> scalar(c, "SELECT COUNT(*) FROM ledger"));
+    expireDeliveryCopies(instruction);
+    Map<String, Object> recovered = bank.ingest(original), outcome = receipt(recovered);
+    assertEquals(true, recovered.get("duplicate"));
+    for (String key : List.of("payment_id", "sender", "recipient", "amount", "currency",
+        "status", "reason", "bank_ref", "committed_at")) assertEquals(first.get(key), outcome.get(key));
+    assertEquals(99000, balance(payer));
+    assertEquals(1000, balance(merchant));
+    assertEquals(1, payments());
+    assertEquals(entries, db.<Long>read(c -> scalar(c, "SELECT COUNT(*) FROM ledger")).longValue());
+    for (Object value : (List<?>) recovered.get("receipts")) {
+      Map<String, Object> refreshed = BankService.object(value);
+      checkPacket(refreshed);
+      assertTrue(integer(refreshed.get("expires_at")) > now() + 6 * 86400);
+    }
+    assertEquals(1, ((List<?>) bank.inbox(payer, did, 0).get("receipts")).size());
+    assertEquals(1, ((List<?>) bank.inbox(merchant, mid, 0).get("receipts")).size());
+    assertFalse(((List<?>) bank.mailbox((String) instruction.get("sender_mailbox")).get("receipts")).isEmpty());
+    assertEquals(json(recovered.get("receipts")), json(bank.ingest(original).get("receipts")));
+  }
+
+  @Test
+  void expiredRejectedReceiptRemainsRejectedAfterFunding() throws Exception {
+    Map<String, Object> instruction = body(200000), original = wrap(instruction);
+    Map<String, Object> first = receipt(bank.ingest(original));
+    assertEquals("rejected", first.get("status"));
+    bank.topup(payer, map("amount", 200000, "request_id", UUID.randomUUID().toString()));
+    long entries = db.read(c -> scalar(c, "SELECT COUNT(*) FROM ledger"));
+    expireDeliveryCopies(instruction);
+    Map<String, Object> outcome = receipt(bank.ingest(original));
+    assertEquals(first.get("bank_ref"), outcome.get("bank_ref"));
+    assertEquals(first.get("committed_at"), outcome.get("committed_at"));
+    assertEquals("rejected", outcome.get("status"));
+    assertEquals("Insufficient demo balance", outcome.get("reason"));
+    assertEquals(300000, balance(payer));
+    assertEquals(0, balance(merchant));
+    assertEquals(entries, db.<Long>read(c -> scalar(c, "SELECT COUNT(*) FROM ledger")).longValue());
+    assertEquals(1, payments());
+  }
+
   @Test
   void concurrentDuplicateGatewaysDebitExactlyOnce() throws Exception {
     Map<String, Object> p = wrap(body(1000));

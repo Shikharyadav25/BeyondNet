@@ -39,7 +39,7 @@ Phone SQLite contains own payment history and bank receipts plus opaque relay pa
 - Clock synchronization is required. Peer messages tolerate two minutes; new bank payment instructions tolerate at most 60 seconds in the future. Expiry uses signed timestamps at the bank.
 - Wi-Fi mesh, real bank integrations, OTP/SIM identity verification, device recovery, key rotation, refunds, cancellation, chargebacks, signed invoices, private messaging, and high-availability deployment are not implemented.
 - PostgreSQL transactions serialize bank writes with per-bank advisory locks; uniqueness constraints prevent duplicate decisions. The pause switch and rate counters are in memory. Do not deploy multiple workers and assume coordinated operational controls.
-- The BLE command protocol has no transport confidentiality beyond encrypted application payloads and no durable cross-restart replay database. A captured authenticated command cannot create a new signed payment but may be replayed during its short clock window after restart. Adversarial availability protection needs further work.
+- Peer command replay claims persist in SQLite through the signed clock window, including restarts. Responses are bound to the selected device and the peer identity established in the exchange; inventory IDs and returned packet IDs must match. The BLE command layer still exposes metadata and has no separate session encryption. Enrolled peers can drop or delay traffic; availability is not guaranteed.
 - BLE radio throughput, advertising support, connection behavior, and battery usage vary by device. Hardware acceptance is mandatory.
 
 ## Before any real-money system
@@ -52,3 +52,7 @@ A licensed payment-provider integration and its security/compliance requirements
 PIN setup/reset requires the account password over HTTPS. Bank PIN storage uses a fresh salt and scrypt hash; payment PIN input is never written to phone intent history or bank events. It exists briefly in process memory for signing/encryption/verification. Five unique wrong attempts lock authorization for 600 seconds; duplicate recovery does not add attempts. Never use a real UPI PIN in this demo.
 
 New signed instructions have a maximum 600-second lifetime. Reachable payments settle immediately. Already-committed outcomes remain recoverable after expiry; unsubmitted expiry cannot debit funds. The existing X25519/HKDF/AES-256-GCM hybrid scheme and Ed25519 signatures are retained rather than replaced with RSA. PostgreSQL and the importer are implemented in Java. SQLite JDBC is included solely to read historical bank data once.
+
+## Recovery after receipt retention
+
+Receipt packet expiry limits transport propagation; it does not undo a durable financial decision. A verified replay of the original signed authorization recovers the stored decision before new authorization/PIN checks. If its saved delivery packets have expired, the bank atomically creates fresh, encrypted, signed receipt copies and republishes them to device inboxes and mailboxes. Payment ID, parties, amount, outcome, reference and original commit time remain unchanged; balance snapshots use current ledger revisions. No new ledger entries or debit are made. The phone continues to reject expired relay packets.

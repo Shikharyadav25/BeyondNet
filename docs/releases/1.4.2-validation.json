@@ -1,0 +1,23 @@
+{
+  "date": "2026-10-27",
+  "mobile": "1.4.2+16",
+  "base_commit": "329e04ce6dd2dc3ac7485ec3daa800b40b242e12",
+  "flutter_tests": 107,
+  "java_bank": {
+    "tests": 36,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "android_native": {
+    "tests": 20,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "independent_python_tests": 5,
+  "static_analysis": "passed",
+  "release_build": "passed",
+  "apk_sha256": "296ce3e39f2d7b46339c2d10eaad5e4ab3594c7070b7176ca2238a63ccc638f2",
+  "physical_bluetooth": "not rerun; no ADB device detected"
+}

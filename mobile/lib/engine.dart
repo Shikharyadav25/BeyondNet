@@ -23,6 +23,14 @@ class BankFailure implements Exception {
   String toString() => message;
 }
 
+class EnrollmentFailure implements Exception {
+  final String message;
+  final bool resumeSignIn;
+  EnrollmentFailure(this.message, {this.resumeSignIn = false});
+  @override
+  String toString() => message;
+}
+
 class BeyondNetEngine extends ChangeNotifier {
   final LocalStore store = LocalStore();
   final FlutterSecureStorage secure = const FlutterSecureStorage();
@@ -250,7 +258,25 @@ class BeyondNetEngine extends ChangeNotifier {
       );
     }
     final base = url.trim().replaceAll(RegExp(r'/+$'), '');
-    final health = await request('/api/health', url: base);
+    Json health;
+    try {
+      health = await request('/api/health', url: base);
+    } on TimeoutException {
+      throw EnrollmentFailure(
+        'The bank did not respond. Check this phone’s internet connection and '
+        'that the bank and tunnel are running. No account details were sent.',
+      );
+    } on SocketException {
+      throw EnrollmentFailure(
+        'Cannot reach the bank. Connect this phone to the internet and check '
+        'the bank URL. No account details were sent.',
+      );
+    } on http.ClientException {
+      throw EnrollmentFailure(
+        'Cannot connect securely to the bank. Check this phone’s internet '
+        'connection and bank URL. No account details were sent.',
+      );
+    }
     final t = {
       for (final k in ['sign_key', 'box_key', 'mesh_id', 'fingerprint'])
         k: health[k],
@@ -266,16 +292,34 @@ class BeyondNetEngine extends ChangeNotifier {
         'Bank fingerprint does not match the laptop. Check the URL and fingerprint.',
       );
     }
-    final result = await request(
-      name == null ? '/api/login' : '/api/signup',
-      url: base,
-      body: {
-        'account': id.trim().toLowerCase(),
-        'password': password,
-        if (name != null) 'name': name.trim(),
-        if (name != null) 'role': role,
-      },
-    );
+    Json result;
+    try {
+      result = await request(
+        name == null ? '/api/login' : '/api/signup',
+        url: base,
+        body: {
+          'account': id.trim().toLowerCase(),
+          'password': password,
+          if (name != null) 'name': name.trim(),
+          if (name != null) 'role': role,
+        },
+      );
+    } on BankFailure catch (error) {
+      if (name != null && error.status == 409) {
+        throw EnrollmentFailure(
+          'This payment ID is already registered. Sign in with the same ID '
+          'and password to finish setup, or choose a different ID.',
+          resumeSignIn: true,
+        );
+      }
+      rethrow;
+    } on TimeoutException {
+      throw _accountConnectionFailure(name != null);
+    } on SocketException {
+      throw _accountConnectionFailure(name != null);
+    } on http.ClientException {
+      throw _accountConnectionFailure(name != null);
+    }
     if (result['trust']['fingerprint'] != actual) {
       throw StateError(
         'Bank trust changed during enrollment. Retry after checking the laptop.',
@@ -309,20 +353,36 @@ class BeyondNetEngine extends ChangeNotifier {
       'sign_key': base64Encode((await signing.extractPublicKey()).bytes),
       'box_key': base64Encode((await encryption.extractPublicKey()).bytes),
     };
-    final registered = await request(
-      '/api/devices',
-      url: base,
-      token: result['token'],
-      body: {
-        for (final k in ['device_id', 'sign_key', 'box_key']) k: identity[k],
-        'proof': (await sign(signing, {
-          'device_id': did,
-          'account_id': aid,
-          'sign_key': identity['sign_key'],
-          'box_key': identity['box_key'],
-        }))['signature'],
-      },
-    );
+    Json registered;
+    try {
+      registered = await request(
+        '/api/devices',
+        url: base,
+        token: result['token'],
+        body: {
+          for (final k in ['device_id', 'sign_key', 'box_key']) k: identity[k],
+          'proof': (await sign(signing, {
+            'device_id': did,
+            'account_id': aid,
+            'sign_key': identity['sign_key'],
+            'box_key': identity['box_key'],
+          }))['signature'],
+        },
+      );
+    } catch (error) {
+      if (error is TimeoutException ||
+          error is SocketException ||
+          error is http.ClientException ||
+          error is BankFailure) {
+        throw EnrollmentFailure(
+          'Your account was verified, but device setup did not finish. '
+          'Check the connection and sign in with the same ID and password '
+          'to finish setup. Your saved device keys will be kept.',
+          resumeSignIn: true,
+        );
+      }
+      rethrow;
+    }
     await verify(
       t['sign_key'],
       Map<String, dynamic>.from(registered['certificate']),
@@ -350,6 +410,18 @@ class BeyondNetEngine extends ChangeNotifier {
 
   Future<void> saveProfile() =>
       secure.write(key: 'profile', value: jsonEncode(profile));
+
+  EnrollmentFailure _accountConnectionFailure(
+    bool creating,
+  ) => EnrollmentFailure(
+    creating
+        ? 'The bank did not confirm account creation. Your account may already '
+              'exist. Check the connection, then sign in with the same ID and '
+              'password to finish setup.'
+        : 'Sign-in did not finish. Check this phone’s internet connection and '
+              'that the bank and tunnel are running, then sign in again.',
+    resumeSignIn: creating,
+  );
   Future<void> refreshProfile() async {
     final result = await request('/api/me');
     applyAccount(Map<String, dynamic>.from(result['account']));
@@ -669,6 +741,7 @@ class BeyondNetEngine extends ChangeNotifier {
                   await signedRpc({'op': 'resolve', 'account_id': target}, id),
                 ),
                 expectedRequest: id,
+                expectedDevice: connectedPeer,
               );
               final result = answer['command']['certificate'];
               return result == null ? null : Map<String, dynamic>.from(result);
@@ -1025,7 +1098,12 @@ class BeyondNetEngine extends ChangeNotifier {
     }),
     'certificate': certificate,
   };
-  Future<Json> validateRpc(Json message, {String? expectedRequest}) async {
+  Future<Json> validateRpc(
+    Json message, {
+    String? expectedRequest,
+    Json? expectedPeer,
+    String? expectedDevice,
+  }) async {
     final cert = Map<String, dynamic>.from(message['certificate']);
     final peer = await verify(trust['sign_key'], cert);
     if (peer['mesh_id'] != trust['mesh_id'] ||
@@ -1035,6 +1113,19 @@ class BeyondNetEngine extends ChangeNotifier {
       throw StateError('Peer is not permitted in this mesh.');
     }
     final body = await verify(peer['sign_key'], message);
+    if (expectedDevice != null && peer['device_id'] != expectedDevice) {
+      throw StateError('The responding phone is not the selected peer.');
+    }
+    if (expectedPeer != null &&
+        [
+          'device_id',
+          'account_id',
+          'mesh_id',
+          'sign_key',
+          'box_key',
+        ].any((field) => peer[field] != expectedPeer[field])) {
+      throw StateError('Peer identity changed during the exchange.');
+    }
     if (expectedRequest != null && body['request_id'] != expectedRequest) {
       throw StateError('Peer response does not match request.');
     }
@@ -1301,12 +1392,18 @@ class BeyondNetEngine extends ChangeNotifier {
 
   Future<void> syncPeer(PeerRadio peer) async {
     final key = peer.peripheral.uuid.toString();
+    final selectedDevice = identityByRadio[key];
     await radio.connect<void>(peer, (raw) async {
       Json? peerIdentity;
       Future<Json> rpc(Json cmd) async {
         final rid = const Uuid().v4();
         final response = await raw(await signedRpc(cmd, rid));
-        final checked = await validateRpc(response, expectedRequest: rid);
+        final checked = await validateRpc(
+          response,
+          expectedRequest: rid,
+          expectedPeer: peerIdentity,
+          expectedDevice: selectedDevice,
+        );
         peerIdentity = Map<String, dynamic>.from(checked['peer']);
         identityByRadio[key] = peerIdentity!['device_id'];
         return Map<String, dynamic>.from(checked['command']);
@@ -1331,6 +1428,7 @@ class BeyondNetEngine extends ChangeNotifier {
     while (offset != null) {
       final remote = await rpc({'op': 'inventory', 'offset': offset});
       if (remote['op'] != 'inventory' ||
+          remote['device_id'] != peerIdentity()['device_id'] ||
           remote['ids'] is! List ||
           remote['ids'].length > 48 ||
           remote['ids'].any((id) => id is! String || id.length != 64)) {
@@ -1416,6 +1514,9 @@ class BeyondNetEngine extends ChangeNotifier {
       final value = await rpc({'op': 'get', 'id': id, 'online': bankReachable});
       if (value['op'] == 'packet') {
         final packet = Map<String, dynamic>.from(value['packet']);
+        if (packet['id'] != id) {
+          throw StateError('Peer returned a different packet than requested.');
+        }
         final needsApproval = packet['kind'] == 'payment' && remoteRouting == 3;
         if (needsApproval) {
           await receiveOffer(packet, identity);

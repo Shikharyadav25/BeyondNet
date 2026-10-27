@@ -257,6 +257,15 @@ class Hint extends StatelessWidget {
 }
 
 String userErrorMessage(Object error) {
+  if (error is TimeoutException) {
+    return 'The connection timed out. Check the bank connection or nearby '
+        'phone and try again. If you were paying, check Activity before '
+        'creating another payment.';
+  }
+  if (error is SocketException) {
+    return 'Cannot reach the bank. Check this phone’s internet connection '
+        'and that the bank and tunnel are running.';
+  }
   if (error is PlatformException) {
     if (error.code == 'relay' && error.message != null) return error.message!;
     return 'This phone could not complete the device operation. '
@@ -421,7 +430,15 @@ class _LoginState extends State<LoginPage> {
       );
       if (mounted && widget.renewal) Navigator.pop(context);
     } catch (e) {
-      if (mounted) await alert(context, e);
+      if (mounted) {
+        setState(() {
+          busy = false;
+          if (e is EnrollmentFailure && e.resumeSignIn && !widget.renewal) {
+            signup = false;
+          }
+        });
+        await alert(context, e);
+      }
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -1628,7 +1645,7 @@ class _ShellState extends State<Shell> {
         'BeyondNet is a demo bank system. Payments settle only when a gateway reaches the bank. A relay acknowledgment is not proof of payment. Enabled Bluetooth relay continues in a visible background service; force-stop and device battery restrictions can interrupt it.',
       ),
       const SizedBox(height: 20),
-      const Center(child: Eyebrow('BEYONDNET · VERSION 1.3.6')),
+      const Center(child: Eyebrow('BEYONDNET · VERSION 1.4.2')),
     ],
   );
   Future<void> editPeers() async {

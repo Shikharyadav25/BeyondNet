@@ -1,6 +1,8 @@
-# Validation and source audit — updated 17 October 2026
+# Validation and source audit — updated 27 October 2026
 
-Current phone release: **1.3.6+13**, Android 10+. Current backend: Java 21+ / Spring Boot 4.1.1 / PostgreSQL, artifact `bank-1.3.3.jar`.
+Current phone release: **1.4.2+16**, Android 10+. Current backend: Java 21+ / Spring Boot 4.1.1 / PostgreSQL, artifact `bank-1.3.3.jar`.
+
+Current release checks and audit fixes: [1.4.2 validation](RELEASE_1.4.2.md). The physical reports below are historical results for their stated versions; they do not validate the new APK.
 
 ## Physical two-phone test and BLE framing — 17 October 2026
 
