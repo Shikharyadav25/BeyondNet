@@ -10,7 +10,11 @@ BeyondNet is an Android payment proof of concept for environments with unreliabl
 
 > BeyondNet uses demo funds and has no real UPI or banking integration. Payment initiation can happen offline; final settlement requires an internet-connected gateway to reach the bank.
 
-[Get started](#getting-started) · [Architecture](#architecture) · [Features](#features) · [Tech stack](#tech-stack) · [Security](#security-and-payment-safety) · [Documentation](#documentation)
+**[Download Android 1.4.2](https://raw.githubusercontent.com/Shikharyadav25/BeyondNet/v1.4.2/installers/BeyondNet-Android-1.4.2.apk)** · [Release notes](docs/RELEASE_1.4.2.md) · [APK checksums](installers/SHA256SUMS.txt) · [Versioned source](https://github.com/Shikharyadav25/BeyondNet/tree/v1.4.2)
+
+**168 automated tests passed on 27 October 2026.** The release fixes all five findings from the code audit. Physical Bluetooth acceptance for this APK is still outstanding; automated radio simulations do not establish real-device delivery.
+
+[Get started](#getting-started) · [Verified results](#verified-release-results) · [Architecture](#architecture) · [Features](#features) · [Tech stack](#tech-stack) · [Security](#security-and-payment-safety) · [Documentation](#documentation)
 
 ## Vision
 
@@ -102,6 +106,21 @@ Install the update **over the existing app** on every participating phone; do no
 
 See [release validation and acceptance steps](docs/RELEASE_1.4.2.md) and the [security roadmap](docs/SECURITY_ROADMAP.md).
 
+## Verified release results
+
+| Check | Result | What it exercises |
+| --- | --- | --- |
+| Flutter application tests | **107 passed** | Accounts, partial-enrollment recovery, payments, simulated offline routing, durable queues and receipt verification |
+| Java bank tests | **36 passed** | Settlement, duplicate submissions, PIN checks, rejection handling and receipt refresh without another debit |
+| Android native tests | **20 passed** | Service lifecycle, BLE session APIs and SQLite startup using Robolectric |
+| Independent Python tests | **5 passed** | HTTP/WebSocket behavior, cross-language cryptography and legacy migration |
+| Flutter static analysis | **No issues** | Application and test source checks |
+| Release APK build | **Passed** | Version 1.4.2, build code 16, Android 10+, existing signing identity verified |
+
+Tests use temporary identities and a separate PostgreSQL instance. The live integration tests exercise the Dart app against the Java bank; Bluetooth radio behavior is simulated. No new physical two-phone payment or on-device upgrade was observed for this release.
+
+Detailed scope, artifact SHA-256 and the phone acceptance checklist are in [release validation](docs/RELEASE_1.4.2.md). A machine-readable summary is available in [validation results](docs/releases/1.4.2-validation.json).
+
 ## Tech stack
 
 | Layer | Technologies | Responsibility |
@@ -178,7 +197,7 @@ Keep the bank and tunnel running, and the laptop awake and online during testing
 
 ### 3. Install and enroll the phones
 
-Download [BeyondNet Android 1.4.2](installers/BeyondNet-Android-1.4.2.apk) onto each Android 10+ phone, or build from source below. Update existing installations in place to preserve keys and queued payments.
+Download [BeyondNet Android 1.4.2](https://raw.githubusercontent.com/Shikharyadav25/BeyondNet/v1.4.2/installers/BeyondNet-Android-1.4.2.apk) onto each Android 10+ phone, or build from source below. Update existing installations in place to preserve keys and queued payments.
 
 1. While online, scan the bank QR or select its image from the gallery.
 2. Create Personal and Merchant accounts with unique IDs ending in `@beyondnet` and passwords of at least eight characters.
@@ -186,6 +205,8 @@ Download [BeyondNet Android 1.4.2](installers/BeyondNet-Android-1.4.2.apk) onto 
 4. Try an online payment first; match the phone receipt reference with the bank dashboard and ledger.
 
 There are no public default login credentials. Create your own demo accounts and use a PIN separate from any real banking PIN.
+
+If signup loses its response, the account may already exist. Use **Sign in** with the same ID and password to finish enrollment; the app preserves entered credentials and any saved device keys. A failed connection check before signup sends no account details. Keep the bank and tunnel running, and keep the phone online for initial setup. Check Activity before creating another payment when a payment outcome is unknown.
 
 ### 4. Try offline delivery
 
@@ -293,5 +314,6 @@ The released nearby transport is Bluetooth LE. No iPhone app or Wi-Fi mesh is in
 | [Background relay](docs/BACKGROUND_RELAY.md) | Service lifecycle and physical acceptance |
 | [Physical mesh test](docs/MESH_TEST_GUIDE.md) | Three- and four-phone approval and recovery steps |
 | [Security roadmap](docs/SECURITY_ROADMAP.md) | Limitations and staged upgrades |
-| [Validation](docs/VALIDATION.md) | Release checks and evidence limits |
+| [1.4.2 release](docs/RELEASE_1.4.2.md) | Audit fixes, current test results, APK identity and acceptance steps |
+| [Validation history](docs/VALIDATION.md) | Earlier dated checks and evidence limits |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Common setup and runtime problems |
