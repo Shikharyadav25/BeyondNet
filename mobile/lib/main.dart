@@ -9,7 +9,6 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'engine.dart';
-import 'campus/campus_page.dart';
 import 'payment_pin.dart';
 import 'bank_setup_code.dart';
 import 'bank_setup_scan.dart';
@@ -442,23 +441,8 @@ class _LoginState extends State<LoginPage> {
             children: [
               const SizedBox(height: 22),
               const Brand(),
-              const SizedBox(height: 20),
-              if (!widget.renewal)
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.school_outlined),
-                  label: const Text('Open Campus information'),
-                  onPressed: () => Navigator.push(
-                    context,
-                    MaterialPageRoute<void>(
-                      builder: (_) => Scaffold(
-                        appBar: AppBar(title: const Text('Campus')),
-                        body: const SafeArea(child: CampusPage()),
-                      ),
-                    ),
-                  ),
-                ),
-              const SizedBox(height: 24),
-              const Eyebrow('DEMO PAYMENTS'),
+              const SizedBox(height: 45),
+              const Eyebrow('YOUR SIGNAL IS ENOUGH'),
               const SizedBox(height: 12),
               Text(
                 widget.renewal
@@ -679,15 +663,7 @@ class _ShellState extends State<Shell> {
       appBar: AppBar(
         title: tab == 0
             ? const Brand()
-            : Text(
-                [
-                  '',
-                  'Activity',
-                  'Nearby network',
-                  'Your device',
-                  'Campus',
-                ][tab],
-              ),
+            : Text(['', 'Activity', 'Nearby network', 'Your device'][tab]),
         actions: [
           IconButton(
             tooltip: 'Device settings',
@@ -709,13 +685,7 @@ class _ShellState extends State<Shell> {
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 650),
-            child: [
-              home(),
-              activity(),
-              nearbyPage(),
-              settings(),
-              const CampusPage(),
-            ][tab],
+            child: [home(), activity(), nearbyPage(), settings()][tab],
           ),
         ),
       ),
@@ -741,10 +711,6 @@ class _ShellState extends State<Shell> {
           NavigationDestination(
             icon: Icon(Icons.tune_rounded),
             label: 'Device',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.school_outlined),
-            label: 'Campus',
           ),
         ],
       ),
@@ -1662,7 +1628,7 @@ class _ShellState extends State<Shell> {
         'BeyondNet is a demo bank system. Payments settle only when a gateway reaches the bank. A relay acknowledgment is not proof of payment. Enabled Bluetooth relay continues in a visible background service; force-stop and device battery restrictions can interrupt it.',
       ),
       const SizedBox(height: 20),
-      const Center(child: Eyebrow('BEYONDNET · VERSION 1.4.0')),
+      const Center(child: Eyebrow('BEYONDNET · VERSION 1.3.6')),
     ],
   );
   Future<void> editPeers() async {

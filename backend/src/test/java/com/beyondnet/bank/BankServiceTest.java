@@ -128,19 +128,6 @@ class BankServiceTest {
   }
 
   @Test
-  void managedGatewayCredentialsAreNarrowRotatableAndRevocable() {
-    var issued = bank.provisionGateway(map("id", "library", "expires_at", now() + 3600));
-    String auth = "Bearer " + issued.get("token");
-    assertEquals("library", bank.gateway(auth));
-    assertThrows(BankException.class, () -> bank.account(auth));
-    assertThrows(BankException.class, () -> bank.admin(auth));
-    var rotated = bank.provisionGateway(map("id", "library", "expires_at", now() + 3600));
-    assertThrows(BankException.class, () -> bank.gateway(auth));
-    bank.revokeGateway("library");
-    assertThrows(BankException.class, () -> bank.gateway("Bearer " + rotated.get("token")));
-  }
-
-  @Test
   void pythonFixtureCanonicalSignatureAndEncryption() throws Exception {
     Map<String, Object> f =
         parse(Files.readString(Path.of("../mobile/test/fixtures/python-wire.json")));

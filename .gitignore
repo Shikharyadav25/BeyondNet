@@ -18,6 +18,3 @@ mobile/ios/Flutter/flutter_export_environment.sh
 *.zip
 backend/target/
 dist/
-
-**/target/
-*.pk8

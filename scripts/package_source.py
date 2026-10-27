@@ -12,7 +12,7 @@ with zipfile.ZipFile(OUTPUT,'w',zipfile.ZIP_DEFLATED) as z:
         # Do not recursively repackage a previously extracted source bundle.
         if rel.parts[0].lower() in {'offline-karo', 'beyondnet'}:continue
         if p.is_symlink() or not p.is_file() or any(part in EXCLUDED for part in rel.parts):continue
-        if p.name in SKIP_FILES or p.suffix in {'.zip','.pyc','.iml','.keystore','.jks','.log','.key','.pem','.p12','.pfx','.pk8'} or p.name=='.DS_Store':continue
+        if p.name in SKIP_FILES or p.suffix in {'.zip','.pyc','.iml','.keystore','.jks','.log','.key','.pem','.p12','.pfx'} or p.name=='.DS_Store':continue
         if p.name.startswith('.env') and not p.name.endswith('.example'):continue
         z.write(p,Path('BeyondNet')/rel)
 print(f'Created {OUTPUT.name} ({OUTPUT.stat().st_size:,} bytes)')
