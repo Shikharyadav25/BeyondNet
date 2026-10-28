@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 /// process restart and must never be overridden by a stale Flutter switch.
 class BackgroundRelay {
   static const channel = MethodChannel('beyondnet/relay');
+  static const responseTimeout = Duration(seconds: 8);
 
   void listen(Future<void> Function() refresh) {
     channel.setMethodCallHandler((call) async {
@@ -11,11 +12,14 @@ class BackgroundRelay {
     });
   }
 
-  Future<Map<String, dynamic>> ready() async =>
-      Map<String, dynamic>.from(await channel.invokeMethod('ready'));
+  Future<Map<String, dynamic>> ready() async => Map<String, dynamic>.from(
+    await channel.invokeMethod('ready').timeout(responseTimeout),
+  );
 
-  Future<void> start() async => channel.invokeMethod('start');
-  Future<void> stop() async => channel.invokeMethod('stop');
+  Future<void> start() async =>
+      channel.invokeMethod('start').timeout(responseTimeout);
+  Future<void> stop() async =>
+      channel.invokeMethod('stop').timeout(responseTimeout);
   Future<void> update(String text) async =>
       channel.invokeMethod('update', {'text': text});
   Future<void> batterySettings() async =>

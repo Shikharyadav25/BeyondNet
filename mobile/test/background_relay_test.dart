@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:beyondnet/background_relay.dart';
@@ -14,8 +15,12 @@ class TestRadio implements PeerTransport {
   @override
   bool running = false;
   int starts = 0;
+  Future<void>? startWait;
+  Object? startError;
   @override
   Future<void> start() async {
+    await startWait;
+    if (startError != null) throw startError!;
     running = true;
     starts++;
   }
@@ -162,6 +167,71 @@ void main() {
       expect(engine.relay, isFalse);
       expect(await engine.store.packet(p['id']), isNotNull);
       expect(engine.relayBlocked, contains('permissions'));
+    },
+  );
+  test(
+    'Failed radio startup releases transition and allows another toggle',
+    () async {
+      await engine.init(databasePath: '${directory.path}/phone.db');
+      radio.startError = StateError('Bluetooth did not finish starting');
+      await expectLater(engine.startRelay(), throwsStateError);
+      expect(engine.relayChanging, isFalse);
+      expect(engine.relayEnabled, isFalse);
+      expect(enabled, isFalse);
+      expect(engine.relayBlocked, contains('did not finish'));
+      radio.startError = null;
+      await engine.startRelay();
+      await Future<void>.delayed(Duration.zero); // Immediate monitoring tick.
+      expect(engine.relay, isTrue);
+      expect(engine.relayChanging, isFalse);
+      expect(engine.relayBlocked, isNull);
+    },
+  );
+  test(
+    'Stop waits for lifecycle startup and cannot be undone by its late completion',
+    () async {
+      await engine.init(databasePath: '${directory.path}/phone.db');
+      enabled = true;
+      running = true;
+      final pending = Completer<void>();
+      radio.startWait = pending.future;
+      final restore = engine.restoreBackgroundRelay();
+      await Future<void>.delayed(Duration.zero);
+      expect(engine.relayChanging, isTrue);
+      final stop = engine.stopRelay();
+      await Future<void>.delayed(Duration.zero);
+      expect(calls, isNot(contains('stop')));
+      pending.complete();
+      await Future.wait([restore, stop]);
+      expect(engine.relayChanging, isFalse);
+      expect(engine.relay, isFalse);
+      expect(radio.running, isFalse);
+      expect(enabled, isFalse);
+      await engine.restoreBackgroundRelay();
+      expect(engine.relayEnabled, isFalse);
+    },
+  );
+  test(
+    'Failed background restore stays paused until Bluetooth changes or explicit retry',
+    () async {
+      await engine.init(databasePath: '${directory.path}/phone.db');
+      enabled = true;
+      running = true;
+      radio.startError = StateError('Bluetooth callback timed out');
+      await engine.restoreBackgroundRelay();
+      expect(engine.relayEnabled, isTrue);
+      expect(engine.relay, isFalse);
+      expect(engine.relayChanging, isFalse);
+      radio.startError = null;
+      await engine.restoreBackgroundRelay();
+      expect(radio.starts, 0);
+      expect(engine.relayBlocked, contains('timed out'));
+      blocked = 'Turn Bluetooth on';
+      await engine.restoreBackgroundRelay();
+      blocked = null;
+      await engine.restoreBackgroundRelay();
+      expect(radio.starts, 1);
+      expect(engine.relay, isTrue);
     },
   );
 }

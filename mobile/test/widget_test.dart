@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -15,6 +16,33 @@ Future<void> scroll(WidgetTester tester, Finder finder, double delta) =>
           )
           .first,
     );
+
+class RelayUiEngine extends BeyondNetEngine {
+  Completer<void> attempt = Completer<void>();
+  int stops = 0;
+  @override
+  Future<void> startRelay() async {
+    relayEnabled = true;
+    notifyListeners();
+    try {
+      await attempt.future;
+      relay = true;
+    } catch (_) {
+      relayEnabled = false;
+      rethrow;
+    } finally {
+      notifyListeners();
+    }
+  }
+
+  @override
+  Future<void> stopRelay() async {
+    stops++;
+    relay = relayEnabled = false;
+    relayBlocked = null;
+    notifyListeners();
+  }
+}
 
 void main() {
   test(
@@ -129,8 +157,12 @@ void main() {
     e.dispose();
   });
 
-  BeyondNetEngine sample({bool online = false, bool merchant = false}) {
-    final e = BeyondNetEngine();
+  BeyondNetEngine sample({
+    bool online = false,
+    bool merchant = false,
+    BeyondNetEngine? engine,
+  }) {
+    final e = engine ?? BeyondNetEngine();
     e.profile = {
       'account': {
         'id': 'sam@beyondnet',
@@ -162,6 +194,73 @@ void main() {
     expect(find.text('Bank gateway'), findsNothing);
     await scroll(tester, find.text('Scan for nearby phones'), 180);
     expect(find.text('Scan for nearby phones'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    e.dispose();
+  });
+
+  testWidgets(
+    'Relay startup shows progress and failure unlocks the switch before dismissal',
+    (tester) async {
+      final e = RelayUiEngine();
+      sample(engine: e);
+      await tester.pumpWidget(MaterialApp(home: Shell(engine: e)));
+      await tester.tap(find.text('Nearby'));
+      await tester.pump();
+      await scroll(tester, find.byType(SwitchListTile), 180);
+      await tester.tap(find.byType(Switch));
+      await tester.pump();
+      expect(find.text('Starting nearby relay…'), findsOneWidget);
+      expect(
+        tester.widget<SwitchListTile>(find.byType(SwitchListTile)).onChanged,
+        isNull,
+      );
+      e.attempt.completeError(StateError('Bluetooth did not finish starting'));
+      await tester.pumpAndSettle();
+      expect(find.text('Needs your attention'), findsOneWidget);
+      expect(find.text('Starting nearby relay…'), findsNothing);
+      expect(
+        tester.widget<SwitchListTile>(find.byType(SwitchListTile)).onChanged,
+        isNotNull,
+      );
+      expect(
+        tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
+        isFalse,
+      );
+      await tester.tap(find.text('Got it'));
+      await tester.pumpAndSettle();
+      e.attempt = Completer<void>();
+      await tester.tap(find.byType(Switch));
+      await tester.pump();
+      e.attempt.complete();
+      await tester.pumpAndSettle();
+      expect(find.text('Nearby relay is on'), findsOneWidget);
+      await tester.tap(find.byType(Switch));
+      await tester.pumpAndSettle();
+      expect(find.text('Nearby relay is off'), findsOneWidget);
+      expect(e.stops, 1);
+      await tester.pumpWidget(const SizedBox());
+      e.dispose();
+    },
+  );
+
+  testWidgets('Home explains paused opt-in and lets the user turn it off', (
+    tester,
+  ) async {
+    final e = RelayUiEngine();
+    sample(engine: e);
+    e.relayEnabled = true;
+    e.relayBlocked = 'Turn Bluetooth on';
+    await tester.pumpWidget(MaterialApp(home: Shell(engine: e)));
+    await scroll(tester, find.byType(SwitchListTile), 180);
+    expect(find.text('Relay paused: Turn Bluetooth on'), findsOneWidget);
+    expect(
+      tester.widget<SwitchListTile>(find.byType(SwitchListTile)).onChanged,
+      isNotNull,
+    );
+    await tester.tap(find.byType(Switch));
+    await tester.pumpAndSettle();
+    expect(find.text('Nearby relay is off'), findsOneWidget);
+    expect(e.stops, 1);
     await tester.pumpWidget(const SizedBox());
     e.dispose();
   });

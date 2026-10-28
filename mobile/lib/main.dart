@@ -656,19 +656,70 @@ class Shell extends StatefulWidget {
 class _ShellState extends State<Shell> {
   int tab = 0;
   bool starting = false;
+  bool changingRelay = false, relayStarting = false;
   BeyondNetEngine get e => widget.engine;
-  Future<void> start() async {
-    setState(() => starting = true);
+  Future<void> start() => changeRelay(true);
+  Future<void> changeRelay(bool enabled) async {
+    if (starting || changingRelay || e.relayChanging) return;
+    setState(() {
+      changingRelay = true;
+      relayStarting = enabled;
+    });
+    Object? failure;
     try {
-      if (Platform.isAndroid) {
-        await NearbyPermissions.ensureAndroidReady();
+      if (enabled) {
+        if (Platform.isAndroid) {
+          await NearbyPermissions.ensureAndroidReady().timeout(
+            const Duration(seconds: 60),
+            onTimeout: () => throw StateError(
+              'The Bluetooth permission request did not finish. '
+              'Check Nearby devices in phone Settings, then try again.',
+            ),
+          );
+        }
+        await e.startRelay();
+      } else {
+        await e.stopRelay();
       }
-      await e.startRelay();
     } catch (err) {
-      if (mounted) await alert(context, err);
+      failure = err;
     } finally {
-      if (mounted) setState(() => starting = false);
+      if (mounted) setState(() => changingRelay = false);
     }
+    if (mounted && failure != null) await alert(context, failure);
+  }
+
+  Widget relayStatus() {
+    final busy = changingRelay || e.relayChanging;
+    final label = changingRelay
+        ? relayStarting
+              ? 'Starting nearby relay…'
+              : 'Stopping nearby relay…'
+        : e.relayChanging
+        ? 'Checking nearby relay…'
+        : e.relay
+        ? 'Nearby relay is on'
+        : e.relayEnabled
+        ? 'Relay paused: ${e.relayBlocked ?? "Waiting for Bluetooth to be ready."}'
+        : e.relayBlocked != null
+        ? 'Relay is off: ${e.relayBlocked}'
+        : 'Nearby relay is off';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        children: [
+          if (busy) ...[
+            const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 10),
+          ],
+          Expanded(child: Semantics(liveRegion: true, child: Text(label))),
+        ],
+      ),
+    );
   }
 
   void open(Widget page) =>
@@ -871,16 +922,11 @@ class _ShellState extends State<Shell> {
                 'Available to personal and merchant accounts',
               ),
               value: e.relayEnabled || e.relay,
-              onChanged: starting
+              onChanged: starting || changingRelay || e.relayChanging
                   ? null
-                  : (v) async {
-                      if (v) {
-                        await start();
-                      } else {
-                        await e.stopRelay();
-                      }
-                    },
+                  : changeRelay,
             ),
+            relayStatus(),
             const Hint(
               'Enable relay once, then the app screen can be closed. Bluetooth must stay on. Allow Nearby devices on Android 12+, or Location permission and Location on for Android 10–11. The background relay shows a notification and uses battery. Internet is optional; an online relay forwards requests to the bank automatically.',
             ),
@@ -1225,16 +1271,11 @@ class _ShellState extends State<Shell> {
                 style: TextStyle(fontSize: 12, color: muted),
               ),
               value: e.relayEnabled || e.relay,
-              onChanged: starting
+              onChanged: starting || changingRelay || e.relayChanging
                   ? null
-                  : (v) async {
-                      if (v) {
-                        await start();
-                      } else {
-                        await e.stopRelay();
-                      }
-                    },
+                  : changeRelay,
             ),
+            relayStatus(),
             const Divider(),
             const ListTile(
               contentPadding: EdgeInsets.zero,
@@ -1253,7 +1294,6 @@ class _ShellState extends State<Shell> {
                 onPressed: () => e.background!.batterySettings(),
                 child: const Text('Background battery settings'),
               ),
-            if (e.relayBlocked != null) Hint('Relay paused: ${e.relayBlocked}'),
             Text(
               e.network,
               style: const TextStyle(fontWeight: FontWeight.w600),
@@ -1307,7 +1347,7 @@ class _ShellState extends State<Shell> {
       ),
       const SizedBox(height: 20),
       OutlinedButton.icon(
-        onPressed: e.working || starting
+        onPressed: e.working || starting || changingRelay || e.relayChanging
             ? null
             : () async {
                 if (!e.relay) {

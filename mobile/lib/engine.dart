@@ -72,7 +72,10 @@ class BeyondNetEngine extends ChangeNotifier {
   bool gateway = false, relay = false, working = false, ready = false;
   bool relayEnabled = false, backgroundActive = false;
   String? relayBlocked;
+  String? _relayStartFailure;
   bool _relayTransition = false;
+  Completer<void>? _relayTransitionDone;
+  bool get relayChanging => _relayTransition;
   bool _manualConnectionWaiting = false;
   bool _authorizingPayment = false;
   bool _recipientLookupWaiting = false;
@@ -1009,25 +1012,56 @@ class BeyondNetEngine extends ChangeNotifier {
   }
 
   bool allowed(String id) => allowlist.isEmpty || allowlist.contains(id);
+  String _relayProblem(Object error) {
+    if (error is StateError) return error.message.toString();
+    if (error is TimeoutException) {
+      return 'Android did not respond. Turn Bluetooth off and on, then retry Nearby relay.';
+    }
+    if (error is PlatformException && error.message != null) {
+      return error.message!;
+    }
+    return 'Bluetooth relay could not start. Check Nearby devices permissions, then retry.';
+  }
+
+  Future<void> _changeRelay(Future<void> Function() action) async {
+    _relayTransition = true;
+    final done = _relayTransitionDone = Completer<void>();
+    if (!_disposed) notifyListeners();
+    try {
+      await action();
+    } finally {
+      _relayTransition = false;
+      _relayTransitionDone = null;
+      done.complete();
+      if (!_disposed) notifyListeners();
+    }
+  }
+
   Future<void> startRelay() async {
     if (profile == null) throw StateError('Enroll online first.');
     if (_relayTransition) return;
-    _relayTransition = true;
-    try {
-      await background?.start();
-      relayEnabled = true;
-      await _startRadio();
-      relayBlocked = null;
-    } catch (error) {
-      relayEnabled = false;
-      relay = false;
-      await _radio?.stop();
-      await background?.stop();
-      rethrow;
-    } finally {
-      _relayTransition = false;
-      notifyListeners();
-    }
+    await _changeRelay(() async {
+      try {
+        _relayStartFailure = null;
+        await background?.start();
+        relayEnabled = true;
+        await _startRadio();
+        relayBlocked = null;
+      } catch (error) {
+        relayEnabled = false;
+        backgroundActive = false;
+        relay = false;
+        relayBlocked = _relayProblem(error);
+        // Each native cleanup is bounded; attempt both even if one fails.
+        try {
+          await _radio?.stop();
+        } catch (_) {}
+        try {
+          await background?.stop();
+        } catch (_) {}
+        rethrow;
+      }
+    });
     await restoreBackgroundRelay();
     unawaited(tick());
   }
@@ -1045,40 +1079,55 @@ class BeyondNetEngine extends ChangeNotifier {
 
   Future<void> restoreBackgroundRelay() async {
     if (background == null || !ready || _relayTransition || _disposed) return;
-    _relayTransition = true;
-    try {
-      final status = await background!.ready();
-      relayEnabled = status['enabled'] == true;
-      backgroundActive = status['running'] == true;
-      relayBlocked = status['blocked'] as String?;
-      if (relayEnabled &&
-          backgroundActive &&
-          relayBlocked == null &&
-          profile != null) {
-        if (!relay || !radio.running) await _startRadio();
-      } else if (relay && _radio != null) {
+    await _changeRelay(() async {
+      try {
+        final status = await background!.ready();
+        relayEnabled = status['enabled'] == true;
+        backgroundActive = status['running'] == true;
+        final nativeBlocked = status['blocked'] as String?;
+        // A failed restore stays paused instead of repeatedly locking the
+        // switch on every timer tick. Explicit retry or an adapter/permission
+        // change allows another attempt.
+        if (nativeBlocked != null) _relayStartFailure = null;
+        relayBlocked = nativeBlocked ?? _relayStartFailure;
+        if (relayEnabled &&
+            backgroundActive &&
+            relayBlocked == null &&
+            profile != null) {
+          if (!relay || !radio.running) await _startRadio();
+        } else if (relay && _radio != null) {
+          relay = false;
+          await _radio!.stop();
+          connectedPeer = null;
+        }
+      } catch (error) {
+        relayBlocked = _relayStartFailure = _relayProblem(error);
         relay = false;
-        await _radio!.stop();
-        connectedPeer = null;
+        await _radio?.stop();
       }
-    } catch (error) {
-      relayBlocked = error.toString();
-      relay = false;
-      await _radio?.stop();
-    } finally {
-      _relayTransition = false;
-      if (!_disposed) notifyListeners();
-    }
+    });
   }
 
   Future<void> stopRelay() async {
-    await background?.stop();
-    relayEnabled = false;
-    backgroundActive = false;
-    relay = false;
-    connectedPeer = null;
-    nearby.clear();
-    await _radio?.stop();
+    // A notification/lifecycle refresh can be starting the radio. Finish that
+    // transition before stopping so its late completion cannot turn us back on.
+    while (_relayTransition) {
+      await _relayTransitionDone!.future;
+    }
+    await _changeRelay(() async {
+      try {
+        await background?.stop();
+      } finally {
+        relayEnabled = false;
+        backgroundActive = false;
+        relay = false;
+        relayBlocked = null;
+        _relayStartFailure = null;
+        connectedPeer = null;
+        nearby.clear();
+        await _radio?.stop();
+      }
+    });
     await log('Nearby relay stopped. Saved payments are retained.');
   }
 

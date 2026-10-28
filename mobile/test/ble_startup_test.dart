@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:beyondnet/android_ble_session.dart';
+import 'package:beyondnet/background_relay.dart';
 import 'package:beyondnet/ble_frames.dart';
 import 'package:beyondnet/ble_transport.dart';
 import 'package:bluetooth_low_energy/bluetooth_low_energy.dart';
@@ -11,6 +12,7 @@ class FakeCentral implements CentralManager {
   final events = StreamController<DiscoveredEventArgs>.broadcast();
   BluetoothLowEnergyState currentState = BluetoothLowEnergyState.poweredOn;
   int scans = 0, stops = 0;
+  Future<void>? scanWait, stopWait;
   @override
   BluetoothLowEnergyState get state => currentState;
   @override
@@ -18,11 +20,13 @@ class FakeCentral implements CentralManager {
   @override
   Future<void> startDiscovery({List<UUID>? serviceUUIDs}) async {
     scans++;
+    await scanWait;
   }
 
   @override
   Future<void> stopDiscovery() async {
     stops++;
+    await stopWait;
   }
 
   @override
@@ -62,6 +66,8 @@ class FakePeripheral implements PeripheralManager {
   BluetoothLowEnergyState currentState = BluetoothLowEnergyState.poweredOn;
   int failedAdds = 0, adds = 0, advertisements = 0;
   int writeAcks = 0;
+  int advertisementStops = 0;
+  Future<void>? clearWait, addWait, advertiseWait, stopWait;
   bool failReadResponse = false;
   final responses = <Uint8List>[];
   @override
@@ -89,10 +95,14 @@ class FakePeripheral implements PeripheralManager {
   Stream<GATTCharacteristicReadRequestedEventArgs>
   get characteristicReadRequested => reads.stream;
   @override
-  Future<void> removeAllServices() async {}
+  Future<void> removeAllServices() async {
+    await clearWait;
+  }
+
   @override
   Future<void> addService(GATTService service) async {
     adds++;
+    await addWait;
     if (adds <= failedAdds) {
       throw PlatformException(code: 'IllegalStateException');
     }
@@ -101,10 +111,15 @@ class FakePeripheral implements PeripheralManager {
   @override
   Future<void> startAdvertising(Advertisement advertisement) async {
     advertisements++;
+    await advertiseWait;
   }
 
   @override
-  Future<void> stopAdvertising() async {}
+  Future<void> stopAdvertising() async {
+    advertisementStops++;
+    await stopWait;
+  }
+
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
@@ -228,6 +243,99 @@ void main() {
         AndroidBleSession().reopen(),
         throwsA(isA<PlatformException>()),
       );
+    },
+  );
+  for (final method in ['ready', 'start', 'stop']) {
+    testWidgets('Unanswered native relay $method has a deadline', (
+      tester,
+    ) async {
+      messenger.setMockMethodCallHandler(
+        BackgroundRelay.channel,
+        (_) => Completer<Object?>().future,
+      );
+      try {
+        final background = BackgroundRelay();
+        final Future<Object?> operation = switch (method) {
+          'ready' => background.ready(),
+          'start' => background.start(),
+          _ => background.stop(),
+        };
+        final result = expectLater(operation, throwsA(isA<TimeoutException>()));
+        await tester.pump(BackgroundRelay.responseTimeout);
+        await result;
+      } finally {
+        messenger.setMockMethodCallHandler(BackgroundRelay.channel, null);
+      }
+    });
+  }
+  for (final stage in ['clear services', 'register', 'advertise', 'discover']) {
+    test(
+      'Missing $stage callback releases startup and permits retry',
+      () async {
+        final pending = Completer<void>();
+        switch (stage) {
+          case 'clear services':
+            peripheral.clearWait = pending.future;
+          case 'register':
+            peripheral.addWait = pending.future;
+          case 'advertise':
+            peripheral.advertiseWait = pending.future;
+          case 'discover':
+            central.scanWait = pending.future;
+        }
+        radio = BleTransport(
+          (_) async => {},
+          (_) {},
+          central: central,
+          peripheral: peripheral,
+          androidSession: AndroidBleSession(),
+          operationTimeout: const Duration(milliseconds: 30),
+        );
+        await expectLater(
+          radio.start().timeout(const Duration(seconds: 2)),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              contains('did not finish starting'),
+            ),
+          ),
+        );
+        expect(radio.running, isFalse);
+        expect(radio.subscriptions, isEmpty);
+        expect(peripheral.writes.hasListener, isFalse);
+        expect(peripheral.advertisementStops, greaterThan(0));
+        final scans = central.scans;
+        // A late native reply must not resume the abandoned Dart startup.
+        pending.complete();
+        await Future<void>.delayed(Duration.zero);
+        expect(radio.running, isFalse);
+        expect(central.scans, scans);
+        await radio.start();
+        expect(radio.running, isTrue);
+      },
+    );
+  }
+  test(
+    'Unanswered stop callbacks still close GATT and detach handlers',
+    () async {
+      radio = BleTransport(
+        (_) async => {},
+        (_) {},
+        central: central,
+        peripheral: peripheral,
+        androidSession: AndroidBleSession(),
+        cleanupTimeout: const Duration(milliseconds: 30),
+      );
+      await radio.start();
+      central.stopWait = Completer<void>().future;
+      peripheral.stopWait = Completer<void>().future;
+      final closes = calls.where((c) => c == 'close').length;
+      await radio.stop().timeout(const Duration(seconds: 1));
+      expect(radio.running, isFalse);
+      expect(radio.subscriptions, isEmpty);
+      expect(peripheral.writes.hasListener, isFalse);
+      expect(calls.where((c) => c == 'close').length, closes + 1);
     },
   );
   test(

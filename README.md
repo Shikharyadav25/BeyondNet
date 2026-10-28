@@ -6,13 +6,13 @@ BeyondNet is an Android payment proof of concept for environments with unreliabl
 
 | Mobile release | Bank release | Supported platform | Payment environment |
 | --- | --- | --- | --- |
-| **1.4.2 · build 16** | **1.3.3** | **Android 10+** | **Simulated INR** |
+| **1.4.3 · build 17** | **1.3.3** | **Android 10+** | **Simulated INR** |
 
 > BeyondNet uses demo funds and has no real UPI or banking integration. Payment initiation can happen offline; final settlement requires an internet-connected gateway to reach the bank.
 
-**[Download Android 1.4.2](https://raw.githubusercontent.com/Shikharyadav25/BeyondNet/v1.4.2/installers/BeyondNet-Android-1.4.2.apk)** · [Release notes](docs/RELEASE_1.4.2.md) · [APK checksums](installers/SHA256SUMS.txt) · [Versioned source](https://github.com/Shikharyadav25/BeyondNet/tree/v1.4.2)
+**[Download Android 1.4.3](https://raw.githubusercontent.com/Shikharyadav25/BeyondNet/v1.4.3/installers/BeyondNet-Android-1.4.3.apk)** · [Release notes](docs/RELEASE_1.4.3.md) · [APK checksums](installers/SHA256SUMS.txt) · [Versioned source](https://github.com/Shikharyadav25/BeyondNet/tree/v1.4.3)
 
-**168 automated tests passed on 27 October 2026.** The release fixes all five findings from the code audit. Physical Bluetooth acceptance for this APK is still outstanding; automated radio simulations do not establish real-device delivery.
+**120 application tests passed on 28 October 2026.** This update fixes a Nearby relay startup path that could leave its switch disabled indefinitely, and retains the five earlier audit fixes. Physical Bluetooth acceptance for this APK is still outstanding; automated radio simulations do not establish real-device delivery.
 
 [Get started](#getting-started) · [Verified results](#verified-release-results) · [Architecture](#architecture) · [Features](#features) · [Tech stack](#tech-stack) · [Security](#security-and-payment-safety) · [Documentation](#documentation)
 
@@ -96,7 +96,13 @@ The authorization window is **10 minutes**, not a processing delay. Reachable re
 | Settlement | Funds preflight, unresolved-payment reservations, atomic debit/credit entries, duplicate recovery and bank-enforced balance checks |
 | Operator console | Local authenticated overview, payment decisions, ledger, enrollment QR and labelled software rehearsal |
 
-### Latest release: 1.4.2
+### Latest release: 1.4.3
+
+Bluetooth discovery, advertising, service setup and cleanup now have deadlines. A missing Android callback returns an actionable error and releases the relay switch. Both Home and Nearby show starting, stopping, on, off or paused status. Failed background startup stays paused until an explicit retry or Bluetooth/permission readiness changes, and stopping is serialized with background restoration so a late start cannot undo it.
+
+Install **1.4.3 over the existing app** to preserve enrollment keys and pending payments. No bank update is needed when already running the 1.4.2 backend. See [Nearby switch fix and acceptance steps](docs/RELEASE_1.4.3.md).
+
+### Included audit fixes: 1.4.2
 
 This payment-only release fixes the audited receipt-recovery, relay-capacity and peer-response bugs. A saved paid or rejected decision can be delivered again after its original receipt expires, with no second debit or changed financial outcome. Expired invitations stop consuming capacity. Nearby replies are checked against the selected peer, authenticated inventory and requested packet.
 
@@ -110,16 +116,16 @@ See [release validation and acceptance steps](docs/RELEASE_1.4.2.md) and the [se
 
 | Check | Result | What it exercises |
 | --- | --- | --- |
-| Flutter application tests | **107 passed** | Accounts, partial-enrollment recovery, payments, simulated offline routing, durable queues and receipt verification |
-| Java bank tests | **36 passed** | Settlement, duplicate submissions, PIN checks, rejection handling and receipt refresh without another debit |
-| Android native tests | **20 passed** | Service lifecycle, BLE session APIs and SQLite startup using Robolectric |
-| Independent Python tests | **5 passed** | HTTP/WebSocket behavior, cross-language cryptography and legacy migration |
+| Flutter application tests | **120 passed · 28 Oct** | Accounts, payments, simulated offline routing, receipt verification, missing Bluetooth callbacks, retry and switch state |
+| Java bank tests | **36 passed · 27 Oct baseline** | Settlement, duplicate submissions, PIN checks, rejection handling and receipt refresh without another debit |
+| Android native tests | **20 passed · 27 Oct baseline** | Service lifecycle, BLE session APIs and SQLite startup using Robolectric |
+| Independent Python tests | **5 passed · 27 Oct baseline** | HTTP/WebSocket behavior, cross-language cryptography and legacy migration |
 | Flutter static analysis | **No issues** | Application and test source checks |
-| Release APK build | **Passed** | Version 1.4.2, build code 16, Android 10+, existing signing identity verified |
+| Release APK build | **Passed** | Version 1.4.3, build code 17, Android 10+, existing signing identity verified |
 
 Tests use temporary identities and a separate PostgreSQL instance. The live integration tests exercise the Dart app against the Java bank; Bluetooth radio behavior is simulated. No new physical two-phone payment or on-device upgrade was observed for this release.
 
-Detailed scope, artifact SHA-256 and the phone acceptance checklist are in [release validation](docs/RELEASE_1.4.2.md). A machine-readable summary is available in [validation results](docs/releases/1.4.2-validation.json).
+The Java bank and native Android sources are unchanged in 1.4.3; their baseline results above are dated separately. The current full Flutter suite includes a real Dart-to-Java bank integration check on an isolated database. Detailed scope and the phone acceptance checklist are in [1.4.3 release validation](docs/RELEASE_1.4.3.md). Earlier audit evidence remains in [1.4.2 validation results](docs/releases/1.4.2-validation.json).
 
 ## Tech stack
 
@@ -197,7 +203,7 @@ Keep the bank and tunnel running, and the laptop awake and online during testing
 
 ### 3. Install and enroll the phones
 
-Download [BeyondNet Android 1.4.2](https://raw.githubusercontent.com/Shikharyadav25/BeyondNet/v1.4.2/installers/BeyondNet-Android-1.4.2.apk) onto each Android 10+ phone, or build from source below. Update existing installations in place to preserve keys and queued payments.
+Download [BeyondNet Android 1.4.3](https://raw.githubusercontent.com/Shikharyadav25/BeyondNet/v1.4.3/installers/BeyondNet-Android-1.4.3.apk) onto each Android 10+ phone, or build from source below. Update existing installations in place to preserve keys and queued payments.
 
 1. While online, scan the bank QR or select its image from the gallery.
 2. Create Personal and Merchant accounts with unique IDs ending in `@beyondnet` and passwords of at least eight characters.
@@ -253,7 +259,7 @@ python3 -m venv .venv
 ./scripts/check.sh
 ```
 
-Integration checks use temporary identities and isolated PostgreSQL schemas. The current release's results, audit regression tests, Android artifact identity and physical-test limits are recorded in [release validation](docs/RELEASE_1.4.2.md). Earlier dated results remain in [historical validation](docs/VALIDATION.md).
+Integration checks use temporary identities and isolated PostgreSQL schemas. The current release's relay regression tests and physical-test limits are recorded in [1.4.3 release validation](docs/RELEASE_1.4.3.md). Audit evidence remains in [1.4.2 validation](docs/RELEASE_1.4.2.md) and earlier dated results in [historical validation](docs/VALIDATION.md).
 
 ## Project structure
 
@@ -314,6 +320,7 @@ The released nearby transport is Bluetooth LE. No iPhone app or Wi-Fi mesh is in
 | [Background relay](docs/BACKGROUND_RELAY.md) | Service lifecycle and physical acceptance |
 | [Physical mesh test](docs/MESH_TEST_GUIDE.md) | Three- and four-phone approval and recovery steps |
 | [Security roadmap](docs/SECURITY_ROADMAP.md) | Limitations and staged upgrades |
-| [1.4.2 release](docs/RELEASE_1.4.2.md) | Audit fixes, current test results, APK identity and acceptance steps |
+| [1.4.3 release](docs/RELEASE_1.4.3.md) | Nearby switch recovery, current app test results and acceptance steps |
+| [1.4.2 release](docs/RELEASE_1.4.2.md) | Earlier audit fixes, baseline test results and APK identity |
 | [Validation history](docs/VALIDATION.md) | Earlier dated checks and evidence limits |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Common setup and runtime problems |

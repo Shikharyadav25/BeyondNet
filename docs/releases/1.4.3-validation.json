@@ -1,0 +1,18 @@
+{
+  "date": "2026-10-28",
+  "mobile": "1.4.3+17",
+  "base_commit": "997a833",
+  "flutter_tests": 120,
+  "added_regressions": 13,
+  "targeted_tests_after_final_message_change": 36,
+  "static_analysis": "passed",
+  "release_build": "passed",
+  "apk_sha256": "adcc3fa58694feccd6a6cbe120f57b3086c54abb36a6d5828ae3277917ed555e",
+  "apk_bytes": 73693405,
+  "signing_certificate_sha256": "87631ca5716266c5e82f64acff27185b6b1d84bd126128546545847427a07ff2",
+  "application_id": "com.offlinekaro.offline_karo",
+  "minimum_android_api": 29,
+  "version_code": 17,
+  "unchanged_backend_native_python_baseline": "1.4.2-validation.json; not rerun for this patch",
+  "physical_bluetooth": "not tested; no ADB device detected"
+}

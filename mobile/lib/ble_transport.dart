@@ -78,6 +78,7 @@ class BleTransport implements PeerTransport {
   final CentralManager central;
   final PeripheralManager peripheral;
   final AndroidBleSession? androidSession;
+  final Duration operationTimeout, cleanupTimeout;
   @override
   final Map<String, PeerRadio> discovered = {};
   final Map<String, Assembly> incoming = {};
@@ -98,6 +99,8 @@ class BleTransport implements PeerTransport {
     CentralManager? central,
     PeripheralManager? peripheral,
     AndroidBleSession? androidSession,
+    this.operationTimeout = const Duration(seconds: 8),
+    this.cleanupTimeout = const Duration(seconds: 3),
   }) : central = central ?? CentralManager(),
        peripheral = peripheral ?? PeripheralManager(),
        androidSession =
@@ -236,7 +239,7 @@ class BleTransport implements PeerTransport {
       for (var attempt = 0; attempt < 3; attempt++) {
         try {
           await androidSession?.reopen();
-          await peripheral.removeAllServices();
+          await peripheral.removeAllServices().timeout(operationTimeout);
           await peripheral
               .addService(
                 GATTService(
@@ -260,8 +263,12 @@ class BleTransport implements PeerTransport {
                   ],
                 ),
               )
-              .timeout(const Duration(seconds: 8));
+              .timeout(operationTimeout);
           break;
+        } on TimeoutException {
+          // A missing Android callback is not a refused registration. Close the
+          // session before another attempt rather than stacking pending calls.
+          rethrow;
         } catch (_) {
           if (attempt == 2) {
             throw StateError(
@@ -276,10 +283,12 @@ class BleTransport implements PeerTransport {
           );
         }
       }
-      await peripheral.startAdvertising(
-        Advertisement(name: 'BeyondNet', serviceUUIDs: [serviceId]),
-      );
-      await central.startDiscovery();
+      await peripheral
+          .startAdvertising(
+            Advertisement(name: 'BeyondNet', serviceUUIDs: [serviceId]),
+          )
+          .timeout(operationTimeout);
+      await central.startDiscovery().timeout(operationTimeout);
       running = true;
       cleanup = Timer.periodic(const Duration(seconds: 20), (_) {
         for (final id in touched.keys.toList()) {
@@ -298,6 +307,12 @@ class BleTransport implements PeerTransport {
       onEvent('Nearby Bluetooth relay started.');
     } catch (error) {
       await stop();
+      if (error is TimeoutException) {
+        throw StateError(
+          'Bluetooth did not finish starting. Turn Bluetooth off and on, '
+          'then try Nearby relay again. Your saved payments are retained.',
+        );
+      }
       if (error is! StateError) {
         throw StateError(
           'Bluetooth relay could not start. Check Nearby devices permissions '
@@ -502,16 +517,10 @@ class BleTransport implements PeerTransport {
   Future<void> stop() async {
     running = false;
     cleanup?.cancel();
-    try {
-      await central.stopDiscovery();
-    } catch (_) {}
-    try {
-      await peripheral.stopAdvertising();
-    } catch (_) {}
-    await androidSession?.close();
-    for (final s in subscriptions) {
-      await s.cancel();
-    }
+    // Always detach handlers and close the GATT session even if Android never
+    // acknowledges stopping discovery/advertising. A cleanup wait must not
+    // leave the UI permanently disabled after a failed start.
+    final cancellations = subscriptions.map((s) => s.cancel()).toList();
     subscriptions.clear();
     incoming.clear();
     outgoing.clear();
@@ -519,5 +528,17 @@ class BleTransport implements PeerTransport {
     processing.clear();
     indexed.clear();
     discovered.clear();
+    Future<void> attempt(Future<void> Function() operation) async {
+      try {
+        await operation().timeout(cleanupTimeout);
+      } catch (_) {}
+    }
+
+    await Future.wait([
+      attempt(central.stopDiscovery),
+      attempt(peripheral.stopAdvertising),
+      if (androidSession != null) attempt(androidSession!.close),
+      for (final cancellation in cancellations) attempt(() => cancellation),
+    ]);
   }
 }
