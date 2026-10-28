@@ -1685,7 +1685,7 @@ class _ShellState extends State<Shell> {
         'BeyondNet is a demo bank system. Payments settle only when a gateway reaches the bank. A relay acknowledgment is not proof of payment. Enabled Bluetooth relay continues in a visible background service; force-stop and device battery restrictions can interrupt it.',
       ),
       const SizedBox(height: 20),
-      const Center(child: Eyebrow('BEYONDNET · VERSION 1.4.2')),
+      const Center(child: Eyebrow('BEYONDNET · VERSION 1.4.5')),
     ],
   );
   Future<void> editPeers() async {

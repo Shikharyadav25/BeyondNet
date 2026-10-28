@@ -1,0 +1,19 @@
+{
+  "date": "2026-10-28",
+  "mobile": "1.4.5+19",
+  "base_commit": "6ac12a98a5f9904041204fbb7b5a6cc30129a306",
+  "flutter_tests": 131,
+  "new_pin_connectivity_tests": 6,
+  "static_analysis": "passed",
+  "release_build": "passed",
+  "apk_sha256": "b459611284f6aadc505415fceb2226c5990fd73cf299198e0500dbc0f07b28c5",
+  "apk_bytes": 73709789,
+  "signing_certificate_sha256": "87631ca5716266c5e82f64acff27185b6b1d84bd126128546545847427a07ff2",
+  "application_id": "com.offlinekaro.offline_karo",
+  "version_code": 19,
+  "minimum_android_api": 29,
+  "backend_baseline": "46 Java and 6 Python tests in 1.4.4; backend unchanged, suites not rerun",
+  "native_baseline": "20 tests on 2026-10-27; source unchanged, suite not rerun",
+  "physical_device": "no ADB device detected; real PIN setup and Bluetooth testing pending",
+  "live_health": "local bank and public HTTPS tunnel returned HTTP 200; no live PIN changed"
+}

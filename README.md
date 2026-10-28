@@ -6,13 +6,13 @@ BeyondNet is an Android payment proof of concept for environments with unreliabl
 
 | Mobile release | Bank release | Supported platform | Payment environment |
 | --- | --- | --- | --- |
-| **1.4.4 · build 18** | **1.3.3** | **Android 10+** | **Simulated INR** |
+| **1.4.5 · build 19** | **1.3.3** | **Android 10+** | **Simulated INR** |
 
 > BeyondNet uses demo funds and has no real UPI or banking integration. Payment initiation can happen offline; final settlement requires an internet-connected gateway to reach the bank.
 
-**[Download Android 1.4.4](https://raw.githubusercontent.com/Shikharyadav25/BeyondNet/v1.4.4/installers/BeyondNet-Android-1.4.4.apk)** · [Release notes](docs/RELEASE_1.4.4.md) · [APK checksums](installers/SHA256SUMS.txt) · [Versioned source](https://github.com/Shikharyadav25/BeyondNet/tree/v1.4.4)
+**[Download Android 1.4.5](https://raw.githubusercontent.com/Shikharyadav25/BeyondNet/v1.4.5/installers/BeyondNet-Android-1.4.5.apk)** · [Release notes](docs/RELEASE_1.4.5.md) · [APK checksums](installers/SHA256SUMS.txt) · [Versioned source](https://github.com/Shikharyadav25/BeyondNet/tree/v1.4.5)
 
-**125 app, 46 bank and 6 independent Python tests passed on 28 October 2026.** This release applies verified review fixes for payment retries, receipt recovery, mailbox ownership and privacy, and retains Nearby switch recovery. Physical Bluetooth acceptance for this APK is still outstanding; automated radio simulations do not establish real-device delivery.
+**131 app tests passed on 28 October 2026.** PIN setup now updates when the bank reconnects and offers a connection retry on the form. The unchanged bank retains its 46 Java/6 Python test baseline and the earlier payment/receipt fixes. Physical Bluetooth acceptance for this APK is still outstanding; automated radio simulations do not establish real-device delivery.
 
 [Get started](#getting-started) · [Verified results](#verified-release-results) · [Architecture](#architecture) · [Features](#features) · [Tech stack](#tech-stack) · [Security](#security-and-payment-safety) · [Documentation](#documentation)
 
@@ -96,7 +96,11 @@ The authorization window is **10 minutes**, not a processing delay. Reachable re
 | Settlement | Funds preflight, unresolved-payment reservations, atomic debit/credit entries, duplicate recovery and bank-enforced balance checks |
 | Operator console | Local authenticated overview, payment decisions, ledger, enrollment QR and labelled software rehearsal |
 
-### Latest release: 1.4.4
+### Latest release: 1.4.5
+
+The Payment PIN page now updates when bank connectivity changes, probes the connection on opening, and provides **Check bank connection** without leaving the form. Android connectivity hints cannot indefinitely block a bank probe. Form validation and specific save errors make recovery clear. Install **1.4.5 over the existing app**; no further bank change is needed when already running the 1.4.4 backend. See [PIN setup recovery and acceptance steps](docs/RELEASE_1.4.5.md).
+
+### Included review fixes: 1.4.4
 
 Transient bank database failures now remain retryable. Bank/phone routing validation agrees, malformed inbox receipts cannot block later valid entries, and actual storage failures keep the cursor available for retry. Persistent mailbox ownership prevents a different payment from overwriting receipt delivery, even after expiring delivery rows are cleaned up. Newly generated/refreshed recipient receipts omit the sender's detailed PIN failure. Authorization parsing, login work and rate-limit cleanup are hardened without replacing deployed cryptographic bytes or keys.
 
@@ -122,16 +126,16 @@ See [release validation and acceptance steps](docs/RELEASE_1.4.2.md) and the [se
 
 | Check | Result | What it exercises |
 | --- | --- | --- |
-| Flutter application tests | **125 passed · 28 Oct** | Accounts, payments, simulated offline routing, receipt verification, Bluetooth startup, inbox cursor recovery and bank retry |
-| Java bank tests | **46 passed · 28 Oct** | Settlement, database fault recovery, route validation, mailbox ownership, PIN checks, rejection privacy and receipt refresh |
+| Flutter application tests | **131 passed · 28 Oct** | Accounts, payments, simulated offline routing, Bluetooth startup, receipt recovery, bank retry and PIN-page reconnection |
+| Java bank tests | **46 passed · 1.4.4 baseline** | Settlement, database fault recovery, route validation, mailbox ownership, PIN checks, rejection privacy and receipt refresh |
 | Android native tests | **20 passed · 27 Oct baseline** | Service lifecycle, BLE session APIs and SQLite startup using Robolectric |
-| Independent Python tests | **6 passed · 28 Oct** | HTTP/WebSocket behavior, cross-language cryptography, supplementary-key ordering and legacy migration |
+| Independent Python tests | **6 passed · 1.4.4 baseline** | HTTP/WebSocket behavior, cross-language cryptography, supplementary-key ordering and legacy migration |
 | Flutter static analysis | **No issues** | Application and test source checks |
-| Release APK build | **Passed** | Version 1.4.4, build code 18, Android 10+, existing signing identity verified |
+| Release APK build | **Passed** | Version 1.4.5, build code 19, Android 10+, existing signing identity verified |
 
 Tests use temporary identities and a separate PostgreSQL instance. The live integration tests exercise the Dart app against the Java bank; Bluetooth radio behavior is simulated. No new physical two-phone payment or on-device upgrade was observed for this release.
 
-Native Android source is unchanged; its baseline results above are dated separately. The current full Flutter suite includes a real Dart-to-Java bank integration check on an isolated database. Detailed scope and the phone acceptance checklist are in [1.4.4 release validation](docs/RELEASE_1.4.4.md). Earlier audit evidence remains in [1.4.2 validation results](docs/releases/1.4.2-validation.json).
+Bank/native source is unchanged in 1.4.5; baseline results above belong to their earlier validations. The current full Flutter suite includes a real Dart-to-Java bank integration check on an isolated database. Detailed scope and the phone acceptance checklist are in [1.4.5 release validation](docs/RELEASE_1.4.5.md). Earlier audit evidence remains in [1.4.2 validation results](docs/releases/1.4.2-validation.json).
 
 ## Tech stack
 
@@ -209,7 +213,7 @@ Keep the bank and tunnel running, and the laptop awake and online during testing
 
 ### 3. Install and enroll the phones
 
-Download [BeyondNet Android 1.4.4](https://raw.githubusercontent.com/Shikharyadav25/BeyondNet/v1.4.4/installers/BeyondNet-Android-1.4.4.apk) onto each Android 10+ phone, or build from source below. Update existing installations in place to preserve keys and queued payments.
+Download [BeyondNet Android 1.4.5](https://raw.githubusercontent.com/Shikharyadav25/BeyondNet/v1.4.5/installers/BeyondNet-Android-1.4.5.apk) onto each Android 10+ phone, or build from source below. Update existing installations in place to preserve keys and queued payments.
 
 1. While online, scan the bank QR or select its image from the gallery.
 2. Create Personal and Merchant accounts with unique IDs ending in `@beyondnet` and passwords of at least eight characters.
@@ -265,7 +269,7 @@ python3 -m venv .venv
 ./scripts/check.sh
 ```
 
-Integration checks use temporary identities and isolated PostgreSQL schemas. The current review regression tests and physical-test limits are recorded in [1.4.4 release validation](docs/RELEASE_1.4.4.md). Audit evidence remains in [1.4.2 validation](docs/RELEASE_1.4.2.md) and earlier dated results in [historical validation](docs/VALIDATION.md).
+Integration checks use temporary identities and isolated PostgreSQL schemas. The current PIN/connection regression tests and physical-test limits are recorded in [1.4.5 release validation](docs/RELEASE_1.4.5.md). Review evidence remains in [1.4.4 validation](docs/RELEASE_1.4.4.md), [1.4.2 validation](docs/RELEASE_1.4.2.md) and earlier dated results in [historical validation](docs/VALIDATION.md).
 
 ## Project structure
 
@@ -326,7 +330,8 @@ The released nearby transport is Bluetooth LE. No iPhone app or Wi-Fi mesh is in
 | [Background relay](docs/BACKGROUND_RELAY.md) | Service lifecycle and physical acceptance |
 | [Physical mesh test](docs/MESH_TEST_GUIDE.md) | Three- and four-phone approval and recovery steps |
 | [Security roadmap](docs/SECURITY_ROADMAP.md) | Limitations and staged upgrades |
-| [1.4.4 release](docs/RELEASE_1.4.4.md) | Verified review fixes, current test results and acceptance steps |
+| [1.4.5 release](docs/RELEASE_1.4.5.md) | PIN setup reconnection, current app results and acceptance steps |
+| [1.4.4 release](docs/RELEASE_1.4.4.md) | Earlier verified review fixes and bank test baseline |
 | [Review assessment](docs/REVIEW_2026-10-28.md) | Each supplied finding, verification, applied fix or reason for deferral |
 | [1.4.3 release](docs/RELEASE_1.4.3.md) | Earlier Nearby switch recovery and acceptance steps |
 | [1.4.2 release](docs/RELEASE_1.4.2.md) | Earlier audit fixes, baseline test results and APK identity |

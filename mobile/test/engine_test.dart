@@ -674,11 +674,13 @@ void main() {
     'Connectivity distinguishes disabled internet from a paused bank',
     () async {
       var calls = 0;
+      var offline = true;
       final e = await node(
         'network-device',
         'sam@beyondnet',
         client: MockClient((_) async {
           calls++;
+          if (offline) throw const SocketException('No internet connection');
           return http.Response(
             jsonEncode({'fingerprint': 'expected', 'online': false}),
             200,
@@ -697,7 +699,8 @@ void main() {
         await e.checkConnection();
         expect(e.internet, isFalse);
         expect(e.bankReachable, isFalse);
-        expect(calls, 0);
+        expect(calls, 1);
+        offline = false;
         messenger.setMockMethodCallHandler(
           BeyondNetEngine.platform,
           (_) async => true,

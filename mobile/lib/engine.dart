@@ -467,17 +467,24 @@ class BeyondNetEngine extends ChangeNotifier {
   Future<void> checkConnection() async {
     if (profile == null || checkingConnection || _disposed) return;
     checkingConnection = true;
+    notifyListeners();
     final wasReachable = bankReachable;
     try {
       try {
-        internet = await platform.invokeMethod<bool>('hasInternet');
+        internet = await platform
+            .invokeMethod<bool>('hasInternet')
+            .timeout(const Duration(seconds: 2));
       } on MissingPluginException {
         internet = null;
+      } on PlatformException {
+        internet = null;
+      } on TimeoutException {
+        internet = null;
       }
-      if (internet == false) {
-        throw const SocketException('No internet connection');
-      }
-      if (liveConnected &&
+      // Android's validation flag is a hint. A verified HTTPS response from
+      // this bank is authoritative, including on networks the OS misclassifies.
+      if (bankReachable &&
+          liveConnected &&
           DateTime.now().difference(_lastHealthCheck).inSeconds < 30) {
         unawaited(tick());
         return;
@@ -496,6 +503,7 @@ class BeyondNetEngine extends ChangeNotifier {
         _urgentBankWork = true;
       }
       network = bankReachable ? 'Connected to bank' : 'Bank is paused';
+      if (!_disposed) notifyListeners();
       if (bankReachable) {
         await openLive();
         if (DateTime.now().difference(_lastProfileRefresh).inMinutes >= 5) {
