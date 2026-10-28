@@ -76,6 +76,7 @@ public final class LegacySqliteImport {
           st.execute();
         }
       }
+      backfillMailboxClaims(target);
       update(target, "INSERT INTO migration_meta VALUES('sqlite-v1',?,?)", now(), json(counts));
       old.rollback();
       System.out.println(

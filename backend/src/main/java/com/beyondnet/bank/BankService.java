@@ -141,9 +141,10 @@ public class BankService {
   }
 
   public static String bearer(String header) {
-    return header != null && header.startsWith("Bearer ")
-        ? header.substring(7)
-        : header == null ? "" : header;
+    if (header == null || !header.regionMatches(true, 0, "Bearer ", 0, 7)
+        || header.length() <= 7 || header.substring(7).chars().anyMatch(Character::isWhitespace))
+      throw new BankException(401, "Send an Authorization: Bearer token header");
+    return header.substring(7);
   }
 
   public String account(String header) {
@@ -220,7 +221,8 @@ public class BankService {
         password = text(body, "password", 0, 128);
     Map<String, Object> candidate = db.read(c -> one(c, "SELECT * FROM accounts WHERE id=?", aid));
     // Password hashing must not hold the financial transaction lock.
-    if (candidate == null || !equal(passwordHash(password, (byte[]) candidate.get("salt")),
+    String supplied = passwordHash(password, candidate == null ? new byte[16] : (byte[]) candidate.get("salt"));
+    if (candidate == null || !equal(supplied,
         (String) candidate.get("password")))
       throw new BankException(401, "Account or demo password is incorrect");
     return db.tx(
@@ -448,11 +450,11 @@ public class BankService {
   public Map<String, Object> ingest(Map<String, Object> packet) {
     if (!online)
       throw new BankException(503, "Demo bank connection paused; retain request and retry");
-    Map<String, Object> body;
+    Map<String, Object> body, signed;
     try {
       checkPacket(packet);
       if (!"payment".equals(packet.get("kind"))) throw new IllegalArgumentException();
-      Map<String, Object> signed = openBox(encryption, object(packet.get("box")));
+      signed = openBox(encryption, object(packet.get("box")));
       body = object(signed.get("body"));
       Set<String> fields =
           new HashSet<>(
@@ -486,29 +488,32 @@ public class BankService {
       UUID.fromString((String) body.get("payment_id"));
       if (version == 2 && !text(body, "pin", 6, 6).matches("[0-9]{6}"))
         throw new IllegalArgumentException();
-      if (((String) body.get("sender_mailbox")).length() < 32
-          || ((String) body.get("recipient_mailbox")).length() < 32
+      if (!validMailbox(body.get("sender_mailbox"))
+          || !validMailbox(body.get("recipient_mailbox"))
           || body.get("sender_mailbox").equals(body.get("recipient_mailbox")))
         throw new IllegalArgumentException();
       long duration = integer(body.get("expires_at")) - integer(body.get("created_at"));
       if (duration <= 0 || duration > (version == 2 ? 600 : 900))
         throw new IllegalArgumentException();
-      Map<String, Object> device =
-          db.read(
+    } catch (Exception e) {
+      throw invalidPayment();
+    }
+    // Database/pool failures are retryable server failures, never invalid input.
+    Map<String, Object> senderDevice = db.read(
               c ->
                   one(
                       c,
                   "SELECT * FROM devices WHERE id=? AND account=?",
                       body.get("device_id"),
                       body.get("sender")));
-      if (device == null) throw new IllegalArgumentException();
-      verify((String) device.get("sign_key"), signed);
+    try {
+      if (senderDevice == null) throw new IllegalArgumentException();
+      verify((String) senderDevice.get("sign_key"), signed);
       if (!packet.get("mailbox").equals(body.get("sender_mailbox"))
           || integer(packet.get("expires_at")) != integer(body.get("expires_at")))
         throw new IllegalArgumentException();
     } catch (Exception e) {
-      throw new BankException(
-          400, "Payment validation failed: invalid packet, signature or encrypted instruction");
+      throw invalidPayment();
     }
     // The signed instruction, not a route or gateway identity, owns the financial idempotency key.
     // A plain digest of a body containing a six-digit PIN is itself a guessing
@@ -539,8 +544,15 @@ public class BankService {
               update(c, "UPDATE payments SET hash=? WHERE sender=? AND id=?",
                   requestHash, body.get("sender"), body.get("payment_id"));
             List<?> savedReceipts = JSON.readValue((String) existing.get("receipts"), List.class);
-            if (savedReceipts.stream().anyMatch(value ->
-                integer(object(value).get("expires_at")) <= now())) {
+            if (savedReceipts.stream().anyMatch(value -> {
+              try {
+                Map<String, Object> copy = object(value);
+                checkPacket(copy);
+                return integer(copy.get("expires_at")) <= now();
+              } catch (RuntimeException invalid) {
+                return true; // Repair invalid legacy delivery metadata too.
+              }
+            })) {
               savedReceipts = refreshDecisionReceipts(c, existing, body, packet);
             }
             event(
@@ -553,6 +565,8 @@ public class BankService {
                 "receipts",
                 savedReceipts);
           }
+          for (String key : List.of("sender_mailbox", "recipient_mailbox"))
+            reserveMailbox(c, (String) body.get(key), body);
           Map<String, Object> d =
               one(c, "SELECT * FROM devices WHERE id=?", body.get("device_id"));
           if (d == null) throw new BankException(400, "Sender device was revoked");
@@ -622,7 +636,7 @@ public class BankService {
                         "status",
                         status,
                         "reason",
-                        reason,
+                        device == d ? reason : publicReason(status),
                         "bank_ref",
                         ref,
                         "committed_at",
@@ -719,7 +733,8 @@ public class BankService {
       Map<String, Object> outcome = sign(signing, map(
           "v", 1, "payment_id", decision.get("id"), "sender", decision.get("sender"),
           "recipient", decision.get("recipient"), "amount", integer(decision.get("amount")),
-          "currency", "INR", "status", decision.get("status"), "reason", decision.get("reason"),
+          "currency", "INR", "status", decision.get("status"), "reason",
+          device == sender ? decision.get("reason") : publicReason((String) decision.get("status")),
           "bank_ref", decision.get("bank_ref"), "committed_at", integer(decision.get("committed")),
           "device_id", device.get("id"), "balance", account.get("balance"),
           "balance_revision", account.get("revision")));
@@ -734,6 +749,7 @@ public class BankService {
         decision.get("sender"), decision.get("id"));
     for (String key : List.of("sender_mailbox", "recipient_mailbox")) {
       String cap = (String) body.get(key);
+      if (!ownsMailbox(c, cap, body)) continue;
       List<Map<String, Object>> owned = key.equals("sender_mailbox") ? receipts :
           receipts.stream().filter(value -> cap.equals(value.get("mailbox"))).toList();
       update(c, "INSERT INTO mailboxes VALUES(?,?,?) ON CONFLICT(capability) DO UPDATE SET "
@@ -798,6 +814,7 @@ public class BankService {
   }
 
   public Map<String, Object> mailbox(String cap) {
+    if (!validMailbox(cap)) throw new BankException(400, "Invalid mailbox capability");
     return db.read(
         c -> {
           Map<String, Object> r =
@@ -806,6 +823,30 @@ public class BankService {
               "receipts",
               r == null ? List.of() : JSON.readValue((String) r.get("receipts"), List.class));
         });
+  }
+
+  private static BankException invalidPayment() {
+    return new BankException(400,
+        "Payment validation failed: invalid packet, signature or encrypted instruction");
+  }
+
+  private static String publicReason(String status) {
+    return "paid".equals(status) ? "" : "Payment was not authorized";
+  }
+
+  private static boolean ownsMailbox(Connection c, String cap, Map<String, Object> body)
+      throws Exception {
+    Map<String, Object> owner = one(c, "SELECT sender,payment FROM mailbox_claims WHERE capability=?", cap);
+    return owner != null && body.get("sender").equals(owner.get("sender"))
+        && body.get("payment_id").equals(owner.get("payment"));
+  }
+
+  private static void reserveMailbox(Connection c, String cap, Map<String, Object> body)
+      throws Exception {
+    update(c, "INSERT INTO mailbox_claims VALUES(?,?,?) ON CONFLICT(capability) DO NOTHING",
+        cap, body.get("sender"), body.get("payment_id"));
+    if (!ownsMailbox(c, cap, body))
+      throw new BankException(409, "Mailbox capability belongs to another payment");
   }
 
   public Map<String, Object> state() {

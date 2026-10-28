@@ -33,7 +33,7 @@ Phone SQLite contains own payment history and bank receipts plus opaque relay pa
 
 ## Demo-specific limits
 
-- Legacy rehearsal accounts still have known demo passwords; new signup users choose their own passwords. Free funding is intentionally available to every authenticated account. A publicly exposed endpoint is therefore an intentionally shared demo environment, not private banking. Keep tunnels short-lived and supervised.
+- Startup rotates recognized historical rehearsal passwords and invalidates their sessions; the private recovery file stays on the bank host. New signup users choose their own passwords. Free funding is intentionally available to every authenticated account. A publicly exposed endpoint is therefore an intentionally shared demo environment, not private banking. Keep tunnels short-lived and supervised.
 - Android opt-in relay uses a visible foreground service, persistent queue and timed CPU wake lease. Screen closure is supported; force-stop, reboot, permissions and manufacturer power restrictions can interrupt it. iOS background support and delivery guarantees are not included. See [background relay](BACKGROUND_RELAY.md).
 - Peer revocation is immediately enforced by the bank for new submissions. Offline peers may continue trusting an old certificate until its 30-day expiry; a signed offline revocation distribution system is not implemented.
 - Clock synchronization is required. Peer messages tolerate two minutes; new bank payment instructions tolerate at most 60 seconds in the future. Expiry uses signed timestamps at the bank.
@@ -56,3 +56,9 @@ New signed instructions have a maximum 600-second lifetime. Reachable payments s
 ## Recovery after receipt retention
 
 Receipt packet expiry limits transport propagation; it does not undo a durable financial decision. A verified replay of the original signed authorization recovers the stored decision before new authorization/PIN checks. If its saved delivery packets have expired, the bank atomically creates fresh, encrypted, signed receipt copies and republishes them to device inboxes and mailboxes. Payment ID, parties, amount, outcome, reference and original commit time remain unchanged; balance snapshots use current ledger revisions. No new ledger entries or debit are made. The phone continues to reject expired relay packets.
+
+## Review hardening in 1.4.4
+
+Temporary database failures produce retryable server errors rather than invalid-payment responses. Bank and phone readers agree on path/trail validity; a verified replay can refresh invalid historical delivery metadata too. Inbox processing skips invalid receipts while preserving the cursor on actual storage failure. Persistent mailbox claims prevent another payment from replacing capability delivery, including after expiring rows are removed. Detailed rejection reasons go to the sender/operator, while newly created and refreshed recipient receipts receive generic rejection copy.
+
+Routing hints remain outside the signed financial authorization. A malicious relay can drop/reset them; hop validation is not cryptographic hop enforcement. The current loopback/dashboard-header boundary assumes a correctly configured HTTP tunnel, not an arbitrary TCP forwarder. Rate-limit capacity and account throttling retain denial-of-service tradeoffs. See the [review dispositions](REVIEW_2026-10-28.md) for remaining design work and compatibility decisions.

@@ -93,6 +93,10 @@ public class BankDatabase implements AutoCloseable {
             }
             if (Files.exists(directory.resolve("bank.sqlite3")))
               LegacySqliteImport.importInto(c, directory.resolve("bank.sqlite3"));
+            if (one(c, "SELECT id FROM migration_meta WHERE id='mailbox-claims-v1'") == null) {
+              backfillMailboxClaims(c);
+              update(c, "INSERT INTO migration_meta VALUES('mailbox-claims-v1',?,?)", now(), "{}");
+            }
             // Fresh banks start empty: users sign up with their own credentials.
             update(c, "UPDATE accounts SET role='customer' WHERE role='relay'");
             return null;
@@ -188,6 +192,18 @@ public class BankDatabase implements AutoCloseable {
     try (Statement s = c.createStatement()) {
       s.execute(sql);
     }
+  }
+
+  static void backfillMailboxClaims(Connection c) throws SQLException {
+    // Keep ownership after receipt TTL cleanup. Ambiguous legacy collisions
+    // are reserved to nobody; device inbox recovery remains available.
+    update(c, "INSERT INTO mailbox_claims(capability,sender,payment) "
+        + "SELECT receipt->>'mailbox', "
+        + "CASE WHEN COUNT(DISTINCT (p.sender,p.id))=1 THEN MIN(p.sender) ELSE '' END, "
+        + "CASE WHEN COUNT(DISTINCT (p.sender,p.id))=1 THEN MIN(p.id) ELSE '' END "
+        + "FROM payments p CROSS JOIN LATERAL jsonb_array_elements(p.receipts::jsonb) receipt "
+        + "WHERE receipt->>'mailbox' IS NOT NULL GROUP BY receipt->>'mailbox' "
+        + "ON CONFLICT(capability) DO NOTHING");
   }
 
   public static PreparedStatement statement(Connection c, String sql, Object... args)

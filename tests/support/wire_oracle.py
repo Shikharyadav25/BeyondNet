@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -11,8 +12,17 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 DOMAIN = b"offline-karo/box/v1"
 
 def canonical(value):
-    # The protocol only allows integer money/timestamps, ASCII field names, no floats.
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()
+    # Java/Dart order keys by UTF-16 code units. Preserve the existing wire
+    # bytes, including for supplementary Unicode keys in interoperability tests.
+    def ordered(item):
+        if isinstance(item, dict):
+            return {key: ordered(item[key]) for key in sorted(item, key=lambda key: key.encode('utf-16-be'))}
+        if isinstance(item, list):
+            return [ordered(child) for child in item]
+        if isinstance(item, float):
+            raise ValueError('Floats are not wire values')
+        return item
+    return json.dumps(ordered(value), separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()
 
 def b64(value):
     return base64.b64encode(value).decode()
@@ -61,9 +71,13 @@ def check_packet(p):
         raise ValueError("Packet integrity mismatch")
     if type(p.get("hops")) is not int or not 0 <= p["hops"] <= 4:
         raise ValueError("Hop budget exceeded")
-    if not isinstance(p.get("path"), list) or len(p["path"]) > 8 or any(not isinstance(x, str) or len(x) > 80 for x in p["path"]):
-        raise ValueError("Invalid routing path")
-    if not isinstance(p["mailbox"], str) or not 32 <= len(p["mailbox"]) <= 100:
+    for field, maximum in [('path', 8), ('trail', 4)]:
+        route = p.get(field)
+        if field == 'trail' and route is None:
+            continue
+        if not isinstance(route, list) or len(route) > maximum or any(not isinstance(x, str) or not x or len(x.encode('utf-16-be')) // 2 > 80 for x in route) or len(set(route)) != len(route) or (field == 'trail' and len(route) > p['hops']):
+            raise ValueError('Invalid routing history')
+    if not isinstance(p["mailbox"], str) or not re.fullmatch(r'[0-9a-fA-F]{32,100}', p['mailbox']):
         raise ValueError("Invalid mailbox capability")
     if type(p["expires_at"]) is not int:
         raise ValueError("Invalid expiry")

@@ -1,0 +1,24 @@
+{
+  "date": "2026-10-28",
+  "mobile": "1.4.4+18",
+  "base_commit": "be270b27d7d179e45cbc9f03c1c27fbd0bc35379",
+  "flutter_tests": 125,
+  "java_bank": {
+    "tests": 46,
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0
+  },
+  "independent_python_tests": 6,
+  "static_analysis": "passed",
+  "release_build": "passed",
+  "apk_sha256": "5197c98d5d3d06aa9b57d1636b93f2e3a6d38a693232796062896d46b81123c0",
+  "apk_bytes": 73693405,
+  "signing_certificate_sha256": "87631ca5716266c5e82f64acff27185b6b1d84bd126128546545847427a07ff2",
+  "application_id": "com.offlinekaro.offline_karo",
+  "version_code": 18,
+  "minimum_android_api": 29,
+  "native_android_baseline": "20 tests passed on 2026-10-27; source unchanged, suite not rerun",
+  "physical_bluetooth": "not tested; no ADB device detected",
+  "bank_runtime": "source and isolated test backend verified; restart the development bank to activate"
+}

@@ -11,7 +11,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 @Component
 public class RequestLimits extends OncePerRequestFilter {
-  private final Map<String, Deque<Long>> attempts = new HashMap<>();
+  private final Map<String, Deque<Long>> attempts = new LinkedHashMap<>();
 
   static boolean loopback(String ip) {
     return "127.0.0.1".equals(ip) || "::1".equals(ip)
@@ -35,8 +35,15 @@ public class RequestLimits extends OncePerRequestFilter {
   }
 
   synchronized boolean allow(String key, int limit, long time) {
-    attempts.entrySet().removeIf(e -> e.getValue().isEmpty()
-        || e.getValue().peekLast() <= time - 60_000_000_000L);
+    // Successes move a key to the end. Expired keys therefore form a prefix;
+    // rejection does not change order or extend an attacker's window.
+    var expired = attempts.entrySet().iterator();
+    while (expired.hasNext()) {
+      var entry = expired.next();
+      if (!entry.getValue().isEmpty()
+          && entry.getValue().peekLast() > time - 60_000_000_000L) break;
+      expired.remove();
+    }
     Deque<Long> q = attempts.get(key);
     if (q == null) {
       if (attempts.size() >= 10000) return false;
@@ -46,6 +53,8 @@ public class RequestLimits extends OncePerRequestFilter {
     while (!q.isEmpty() && q.peekFirst() <= time - 60_000_000_000L) q.removeFirst();
     if (q.size() >= limit) return false;
     q.addLast(time);
+    attempts.remove(key);
+    attempts.put(key, q);
     return true;
   }
 

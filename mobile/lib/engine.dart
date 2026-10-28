@@ -577,15 +577,7 @@ class BeyondNetEngine extends ChangeNotifier {
             break;
           case 'receipts':
             if (!_liveReady) throw StateError('Live session not verified');
-            for (final p in data['receipts']) {
-              try {
-                await accept(Map<String, dynamic>.from(p));
-              } on FormatException {
-                await store.event('Ignored an invalid live receipt.');
-              } on StateError {
-                await store.event('Ignored an unverifiable live receipt.');
-              }
-            }
+            await _receiveBankReceipts(data['receipts']);
             _inboxCursor = max(
               _inboxCursor,
               data['cursor'] as int? ?? _inboxCursor,
@@ -1668,6 +1660,39 @@ class BeyondNetEngine extends ChangeNotifier {
     }
   }
 
+  Future<void> _receiveBankReceipts(Object? values) async {
+    if (values is! List) throw const FormatException('Invalid receipt batch');
+    for (final value in values) {
+      Json packet;
+      try {
+        if (value is! Map || value.keys.any((key) => key is! String)) {
+          throw const FormatException('Invalid receipt entry');
+        }
+        packet = Map<String, dynamic>.from(value);
+        await checkPacket(packet);
+        if (packet['kind'] != 'receipt') {
+          throw const FormatException('Expected a bank receipt');
+        }
+      } on FormatException {
+        await store.event('Ignored an invalid bank receipt.');
+        continue;
+      } on ArgumentError {
+        await store.event('Ignored an invalid bank receipt.');
+        continue;
+      }
+      try {
+        await accept(packet);
+      } on PacketStorageFull {
+        rethrow; // Retain the inbox cursor so an unsaved receipt can retry.
+      } on FormatException {
+        await store.event('Ignored an invalid bank receipt.');
+      } on StateError {
+        await store.event('Ignored an unverifiable or expired bank receipt.');
+      }
+      // Database/filesystem failures intentionally propagate; never skip them.
+    }
+  }
+
   Future<void> gatewayTick() async {
     if (DateTime.now().isBefore(nextBankAttempt)) return;
     try {
@@ -1700,9 +1725,7 @@ class BeyondNetEngine extends ChangeNotifier {
         try {
           final result = await submitPacket(clean);
           // Persist every receipt before marking this submission complete.
-          for (final value in result['receipts']) {
-            await accept(Map<String, dynamic>.from(value));
-          }
+          await _receiveBankReceipts(result['receipts']);
           await store.uploaded(p['id']);
           await log(
             'Bank returned signed receipts for packet ${p['id'].toString().substring(0, 8)}.',
@@ -1722,9 +1745,7 @@ class BeyondNetEngine extends ChangeNotifier {
         final own = await request(
           '/api/receipts/$deviceId?after=$_inboxCursor',
         );
-        for (final value in own['receipts']) {
-          await accept(Map<String, dynamic>.from(value));
-        }
+        await _receiveBankReceipts(own['receipts']);
         _inboxCursor = max(_inboxCursor, own['cursor'] as int);
         await store.saveConfig('inbox_cursor:$deviceId', _inboxCursor);
       }
@@ -1750,9 +1771,7 @@ class BeyondNetEngine extends ChangeNotifier {
               .take(6)) {
         queriedMailboxes.add(p['mailbox'] as String);
         final recovered = await request('/api/mailbox/${p['mailbox']}');
-        for (final value in recovered['receipts']) {
-          await accept(Map<String, dynamic>.from(value));
-        }
+        await _receiveBankReceipts(recovered['receipts']);
         if ((recovered['receipts'] as List).isEmpty &&
             p['expires_at'] <= nowSeconds) {
           // Ask the bank to resolve the ORIGINAL expired authorization. A
@@ -1761,9 +1780,7 @@ class BeyondNetEngine extends ChangeNotifier {
           // local cancellation to release reserved funds.
           final original = Map<String, dynamic>.from(p)..remove('uploaded');
           final result = await submitPacket(original);
-          for (final value in result['receipts']) {
-            await accept(Map<String, dynamic>.from(value));
-          }
+          await _receiveBankReceipts(result['receipts']);
           await store.uploaded(p['id']);
         }
       }
@@ -1776,9 +1793,7 @@ class BeyondNetEngine extends ChangeNotifier {
         final result = await request(
           '/api/mailbox/${intent['sender_mailbox']}',
         );
-        for (final value in result['receipts']) {
-          await accept(Map<String, dynamic>.from(value));
-        }
+        await _receiveBankReceipts(result['receipts']);
       }
       backoffSeconds = 5;
       nextBankAttempt = DateTime.now().add(const Duration(seconds: 30));

@@ -5,6 +5,15 @@ import 'package:beyondnet/protocol.dart';
 import 'package:beyondnet/ble_transport.dart';
 
 void main() {
+  test(
+    'Supplementary object keys use the same UTF-16 order as Java and Python',
+    () {
+      expect(
+        utf8.decode(canonical({'\ue000': 2, '😀': 1})),
+        '{"😀":1,"\ue000":2}',
+      );
+    },
+  );
   final fixture = Map<String, dynamic>.from(
     jsonDecode(File('test/fixtures/python-wire.json').readAsStringSync()),
   );

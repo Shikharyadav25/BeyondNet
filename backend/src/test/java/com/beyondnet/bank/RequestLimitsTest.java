@@ -5,6 +5,17 @@ import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.*;
 
 class RequestLimitsTest {
+  @Test void recentSuccessMovesExpiryButRejectedAttemptsDoNotProlongABucket() {
+    var limits = new RequestLimits();
+    long start = 100_000_000_000L;
+    assertTrue(limits.allow("recent", 2, start));
+    assertTrue(limits.allow("expired", 1, start + 1));
+    assertTrue(limits.allow("recent", 2, start + 30_000_000_000L));
+    assertFalse(limits.allow("expired", 1, start + 40_000_000_000L));
+    assertTrue(limits.allow("new", 1, start + 61_000_000_000L));
+    assertTrue(limits.allow("recent", 2, start + 61_000_000_000L));
+    assertFalse(limits.allow("recent", 2, start + 61_000_000_001L));
+  }
   @Test void normalizesCapabilityRoutesAndBoundsMemory() {
     RequestLimits limits = new RequestLimits();
     assertEquals(RequestLimits.route("/api/mailbox/a"), RequestLimits.route("/api/mailbox/b"));

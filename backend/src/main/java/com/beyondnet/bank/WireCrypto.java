@@ -248,12 +248,22 @@ public final class WireCrypto {
         .equals(p.get("id"))) throw new IllegalArgumentException("Packet integrity mismatch");
     long hops = integer(p.get("hops"));
     if (hops < 0 || hops > 4) throw new IllegalArgumentException("Hop budget exceeded");
-    if (!(p.get("path") instanceof List<?> path)
-        || path.size() > 8
-        || path.stream().anyMatch(x -> !(x instanceof String s) || s.length() > 80))
-      throw new IllegalArgumentException("Invalid path");
-    if (!(p.get("mailbox") instanceof String s) || s.length() < 32 || s.length() > 100)
+    for (String field : List.of("path", "trail")) {
+      Object value = p.get(field);
+      if (field.equals("trail") && value == null) continue;
+      int maximum = field.equals("path") ? 8 : 4;
+      if (!(value instanceof List<?> route) || route.size() > maximum
+          || (field.equals("trail") && route.size() > hops)
+          || route.stream().anyMatch(x -> !(x instanceof String s) || s.isEmpty() || s.length() > 80)
+          || new HashSet<>(route).size() != route.size())
+        throw new IllegalArgumentException("Invalid routing history");
+    }
+    if (!validMailbox(p.get("mailbox")))
       throw new IllegalArgumentException("Invalid mailbox");
     integer(p.get("expires_at"));
+  }
+
+  public static boolean validMailbox(Object value) {
+    return value instanceof String s && s.matches("[0-9a-fA-F]{32,100}");
   }
 }

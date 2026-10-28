@@ -354,7 +354,7 @@ class LocalStore {
       if (count >= (owned ? 1000 : 900) ||
           used + canonical(p).length > (owned ? 10 : 8) * 1024 * 1024 ||
           (!owned && peerCount >= 100)) {
-        throw StateError(
+        throw PacketStorageFull(
           'Relay storage full. Retain the sender copy and retry later.',
         );
       }
@@ -519,4 +519,8 @@ class LocalStore {
       );
     });
   }
+}
+
+class PacketStorageFull extends StateError {
+  PacketStorageFull(super.message);
 }

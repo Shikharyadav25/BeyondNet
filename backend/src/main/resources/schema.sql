@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS ledger (
     id BIGSERIAL PRIMARY KEY, payment TEXT NOT NULL, account TEXT NOT NULL,
     delta BIGINT NOT NULL, balance_after BIGINT NOT NULL, committed BIGINT NOT NULL);
 CREATE TABLE IF NOT EXISTS mailboxes (capability TEXT PRIMARY KEY, receipts TEXT NOT NULL, expiry BIGINT NOT NULL);
+CREATE TABLE IF NOT EXISTS mailbox_claims (
+    capability TEXT PRIMARY KEY, sender TEXT NOT NULL, payment TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS topups (
     account TEXT NOT NULL, request_id TEXT NOT NULL, amount BIGINT NOT NULL,
     reference TEXT NOT NULL, PRIMARY KEY(account,request_id));

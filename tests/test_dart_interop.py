@@ -2,7 +2,10 @@ import json
 from pathlib import Path
 from cryptography.hazmat.primitives.asymmetric import x25519
 import pytest
-from tests.support.wire_oracle import unb64,open_box,verify,check_packet
+from tests.support.wire_oracle import unb64,open_box,verify,check_packet,canonical
+
+def test_supplementary_keys_match_java_and_dart_utf16_order():
+    assert canonical({'\ue000': 2, '😀': 1}).decode() == '{"😀":1,"\ue000":2}'
 
 def test_python_decrypts_actual_dart_envelope():
     output=Path('mobile/build/dart-wire.json')

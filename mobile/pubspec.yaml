@@ -1,7 +1,7 @@
 name: beyondnet
 description: Encrypted nearby payment demo for Android.
 publish_to: none
-version: 1.4.3+17
+version: 1.4.4+18
 environment:
   sdk: ^3.12.0
   flutter: ">=3.44.0"

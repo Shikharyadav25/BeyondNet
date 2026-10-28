@@ -143,8 +143,7 @@ Future<void> checkPacket(Json p) async {
   }
   if (p['expires_at'] is! int ||
       p['mailbox'] is! String ||
-      p['mailbox'].length < 32 ||
-      p['mailbox'].length > 100) {
+      !RegExp(r'^[0-9a-fA-F]{32,100}$').hasMatch(p['mailbox'])) {
     throw const FormatException('Invalid routing fields');
   }
 }

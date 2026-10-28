@@ -627,4 +627,139 @@ class BankServiceTest {
     assertEquals(0, balance(merchant));
     assertEquals(0, payments());
   }
+
+  @Test
+  void databaseReadFailureIsRetryableAndTheSamePaymentCanSettleOnce() throws Exception {
+    BankDatabase failing = org.mockito.Mockito.spy(db);
+    BankService service = new BankService(failing);
+    Map<String, Object> request = wrap(body(1000));
+    org.mockito.Mockito.doThrow(new IllegalStateException("Simulated database outage"))
+        .doCallRealMethod().when(failing).read(org.mockito.ArgumentMatchers.any());
+    var failure = assertThrows(IllegalStateException.class, () -> service.ingest(request));
+    assertEquals(500, new BankController(service, null).unexpected(failure).getStatusCode().value());
+    assertEquals(0, payments());
+    assertEquals("paid", receipt(service.ingest(request)).get("status"));
+    assertEquals(true, service.ingest(request).get("duplicate"));
+    assertEquals(1, payments());
+    assertEquals(99000, balance(payer));
+  }
+
+  @Test
+  void malformedRoutingNeverCreatesAPoisonedReceipt() {
+    for (List<?> path : List.of(List.of("relay", "relay"), List.of(""))) {
+      var request = wrap(body(1000));
+      request.put("path", path);
+      assertEquals(400, assertThrows(BankException.class, () -> bank.ingest(request)).status);
+    }
+    for (List<?> trail : List.of(List.of("relay"), List.of("relay", "relay"), List.of(""))) {
+      var request = wrap(body(1000));
+      request.put("trail", trail);
+      assertEquals(400, assertThrows(BankException.class, () -> bank.ingest(request)).status);
+    }
+    assertEquals(0, payments());
+    assertEquals(100000, balance(payer));
+  }
+
+  @Test
+  void mailboxCollisionCannotOverwriteAnotherPaymentEvenAfterReceiptCleanup() {
+    var original = body(1000);
+    bank.ingest(wrap(original));
+    String before = json(bank.mailbox((String) original.get("sender_mailbox")));
+    for (String key : List.of("sender_mailbox", "recipient_mailbox")) {
+      var collision = body(2000);
+      collision.put(key, original.get("sender_mailbox"));
+      assertEquals(409, assertThrows(BankException.class, () -> bank.ingest(wrap(collision))).status);
+      assertEquals(before, json(bank.mailbox((String) original.get("sender_mailbox"))));
+    }
+    db.tx(c -> { update(c, "DELETE FROM mailboxes"); return null; });
+    var collision = body(2000);
+    collision.put("sender_mailbox", original.get("sender_mailbox"));
+    assertEquals(409, assertThrows(BankException.class, () -> bank.ingest(wrap(collision))).status);
+    assertEquals(1, payments());
+    assertEquals(99000, balance(payer));
+    assertEquals(1000, balance(merchant));
+  }
+
+  @Test
+  void mailboxClaimsBackfillFromSavedDecisionsAndPreserveDuplicateRecovery() {
+    var original = body(1000);
+    var request = wrap(original);
+    bank.ingest(request);
+    db.tx(c -> {
+      update(c, "DELETE FROM mailbox_claims");
+      update(c, "DELETE FROM mailboxes");
+      backfillMailboxClaims(c);
+      return null;
+    });
+    var collision = body(2000);
+    collision.put("recipient_mailbox", original.get("recipient_mailbox"));
+    assertEquals(409, assertThrows(BankException.class, () -> bank.ingest(wrap(collision))).status);
+    expireDeliveryCopies(original);
+    assertEquals("paid", receipt(bank.ingest(request)).get("status"));
+    assertEquals(1, payments());
+    assertEquals(99000, balance(payer));
+  }
+
+  @Test
+  void invalidLegacyReceiptRoutingIsRefreshedWithoutAnotherDebit() {
+    var instruction = body(1000);
+    var request = wrap(instruction);
+    var original = receipt(bank.ingest(request));
+    db.tx(c -> {
+      var row = one(c, "SELECT receipts FROM payments WHERE sender=? AND id=?", payer, instruction.get("payment_id"));
+      List<Map<String, Object>> damaged = new ArrayList<>();
+      for (Object raw : JSON.readValue((String) row.get("receipts"), List.class)) {
+        var copy = BankService.object(raw);
+        copy.put("path", List.of("relay", "relay"));
+        damaged.add(copy);
+      }
+      update(c, "UPDATE payments SET receipts=? WHERE sender=? AND id=?", json(damaged), payer, instruction.get("payment_id"));
+      return null;
+    });
+    var recovered = bank.ingest(request);
+    for (Object raw : (List<?>) recovered.get("receipts")) checkPacket(BankService.object(raw));
+    assertEquals(original.get("bank_ref"), receipt(recovered).get("bank_ref"));
+    assertEquals(1, payments());
+    assertEquals(99000, balance(payer));
+  }
+
+  @Test
+  void nonHexMailboxIsRejectedWhileOlderHexLengthsRemainCompatible() {
+    var invalid = body(1000);
+    invalid.put("recipient_mailbox", "z".repeat(48));
+    assertEquals(400, assertThrows(BankException.class, () -> bank.ingest(wrap(invalid))).status);
+    assertEquals(400, assertThrows(BankException.class, () -> bank.mailbox("z".repeat(48))).status);
+    var compatible = body(1000);
+    compatible.put("sender_mailbox", "A".repeat(32));
+    compatible.put("recipient_mailbox", "b".repeat(64));
+    assertEquals("paid", receipt(bank.ingest(wrap(compatible))).get("status"));
+  }
+
+  @Test
+  void recipientDoesNotLearnPinFailureDetailsEvenAfterReceiptRefresh() {
+    var instruction = body(1000);
+    instruction.put("pin", "000000");
+    var request = wrap(instruction);
+    for (int attempt = 0; attempt < 2; attempt++) {
+      var result = bank.ingest(request);
+      assertEquals("Payment PIN is incorrect", receipt(result).get("reason"));
+      var recipientPacket = BankService.object(((List<?>) result.get("receipts")).get(1));
+      var recipientReceipt = verify((String) bank.trust.get("sign_key"),
+          openBox(mb, BankService.object(recipientPacket.get("box"))));
+      assertEquals("rejected", recipientReceipt.get("status"));
+      assertEquals("Payment was not authorized", recipientReceipt.get("reason"));
+      expireDeliveryCopies(instruction);
+    }
+    assertEquals(1, payments());
+    assertEquals(100000, balance(payer));
+  }
+
+  @Test
+  void authorizationRequiresBearerSchemeButAllowsItsCaseInsensitiveSpelling() {
+    String token = (String) bank.login(map("account", payer, "password", password)).get("token");
+    assertEquals(payer, bank.account("bearer " + token));
+    for (String header : List.of(token, "Basic " + token, "Bearer ", "Bearer " + token + " x"))
+      assertEquals(401, assertThrows(BankException.class, () -> bank.account(header)).status);
+    assertEquals(401, assertThrows(BankException.class, () -> bank.account(null)).status);
+  }
 }
