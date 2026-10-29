@@ -2,7 +2,7 @@ name: Build Campus APK
 on:
   push:
     branches: [feat/campus-mesh]
-    paths: [mobile/**, .github/workflows/build-campus-apk.yml]
+    paths: [mobile/**, scripts/report-flutter-tests.py, .github/workflows/build-campus-apk.yml]
 permissions:
   contents: write
 jobs:
