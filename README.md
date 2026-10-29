@@ -1,4 +1,8 @@
+> **Campus development branch:** the app now opens a Payments/Campus chooser. See [Campus architecture, provisioning and validation](docs/CAMPUS.md) for the pilot setup and current limits. Existing installer APKs predate this branch.
+
 # BeyondNet
+
+Campus branch: [PSIT Kanpur server, independent tunnel, credentials and QR setup](docs/PSIT_CAMPUS.md). Campus update: 1.5.1 (build 21); see the guide for APK build status and physical acceptance requirements.
 
 **Initiate payments offline. Carry encrypted requests through nearby phones. Settle when a gateway reaches the bank.**
 

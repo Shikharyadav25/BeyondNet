@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 
 /** Isolated rehearsal ACCOUNTS in the same ledger, never a physical Bluetooth claim. */
 @Service
+@org.springframework.context.annotation.Profile("!campus")
 public class RehearsalService {
   private final BankService bank;
 

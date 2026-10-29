@@ -8,6 +8,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
+@org.springframework.context.annotation.Profile("!campus")
 public class BankController {
   private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(BankController.class);
   private final BankService bank;

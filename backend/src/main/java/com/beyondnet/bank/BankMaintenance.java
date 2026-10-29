@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 
 /** Bounded housekeeping; payment outcomes and ledger entries are never deleted. */
 @Component
+@org.springframework.context.annotation.Profile("!campus")
 public final class BankMaintenance {
   private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor(r -> {
     Thread t = new Thread(r, "bank-housekeeping"); t.setDaemon(true); return t;

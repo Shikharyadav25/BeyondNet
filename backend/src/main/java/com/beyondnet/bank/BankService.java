@@ -9,6 +9,7 @@ import java.util.*;
 import org.springframework.stereotype.Service;
 
 @Service
+@org.springframework.context.annotation.Profile("!campus")
 public class BankService {
   public final BankDatabase db;
   public final Map<String, Object> trust;
