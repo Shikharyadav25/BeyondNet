@@ -278,7 +278,7 @@ class CampusEngine extends ChangeNotifier {
 
   Future<void> reload() async {
     messages = [];
-    if (session != null) {
+    if (enrolled) {
       for (final row in await db.query(
         'packets',
         where: 'campus=? AND expiry>?',
@@ -462,7 +462,13 @@ class CampusEngine extends ChangeNotifier {
     if (_ticking) {
       return _tickDone!.future;
     }
-    if (!enrolled || _disposed) {
+    if (_disposed) {
+      return;
+    }
+    if (!enrolled) {
+      if (session != null && messages.isNotEmpty) {
+        await reload();
+      }
       return;
     }
     _ticking = true;

@@ -165,6 +165,22 @@ void main() {
       await expectLater(relay.handleRpc(raw), throwsStateError);
     },
   );
+  test(
+    'expired local membership hides cached group content and blocks posting',
+    () async {
+      await professor.post('faculty', 'A private assignment', 'assignment');
+      await student.accept((await professor.packets()).single);
+      await student.reload();
+      expect(student.messages, isNotEmpty);
+      student.session!['certificate']['body']['expires_at'] = nowSeconds - 1;
+      await student.tick();
+      expect(student.messages, isEmpty);
+      await expectLater(
+        student.post('section', 'Expired author', 'message'),
+        throwsStateError,
+      );
+    },
+  );
   test('campus server configuration requires a secure origin', () {
     expect(
       () => CampusEngine.endpoint('http://college.example', '/api/campus/TEST'),
