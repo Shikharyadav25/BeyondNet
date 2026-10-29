@@ -64,7 +64,7 @@ python3 scripts/setup-psit.py --public-url https://YOUR-CAMPUS.ngrok-free.app
 
 The image is `data/campus-psit/campus-setup.png`. It contains only `type`, version, campus code, HTTPS URL and the SHA-256 fingerprint of the campus signing public key. The fingerprint is obtained from the provisioned authority, never invented from the URL. A bank QR is rejected by Campus, and a Campus QR is rejected by bank setup.
 
-On the phone, install the new APK over the existing app, open **Campus → Scan college setup QR** (or **Choose campus QR image**), then select the role and enter the generated ID/password. The URL, campus code and fingerprint fill together. Discovery verifies the fingerprint **before** credentials are sent. Trust only a QR supplied by the deployment operator. Manual entry remains available.
+The GitHub-built 1.5.1 APK has a different development signer from 1.5.0 and **cannot install over it**. Use a separate test device or Android user profile. Do not uninstall an enrolled app with unresolved payments. To preserve existing enrollment, rebuild using the original signing keystore on the original build machine; that private key is not stored in this repository. On the test phone, install the new APK, open **Campus → Scan college setup QR** (or **Choose campus QR image**), then select the role and enter the generated ID/password. The URL, campus code and fingerprint fill together. Discovery verifies the fingerprint **before** credentials are sent. Trust only a QR supplied by the deployment operator. Manual entry remains available.
 
 If a free ngrok URL changes, generate a fresh setup QR for new users. Enrolled users select **Renew / update connection**, enter the new HTTPS URL and their password. The app verifies the existing campus signing fingerprint, renews membership and retains its cached queue and cursor. Keep the server's database and keys across restarts to preserve trust.
 
@@ -98,3 +98,15 @@ flutter build apk --release
 ```
 
 Flutter 3.44+ / Dart 3.12+, Android compile SDK 37 and Flutter's matching NDK are required for an APK. Pushing mobile changes to `feat/campus-mesh` also triggers **Build Campus APK**. It runs analysis and tests, builds release, uploads an Actions artifact and commits `installers/BeyondNet-Android-1.5.1.apk` plus its SHA-256 to the campus branch. A version bump alone does not mean the APK exists: wait for a successful run and the installer commit. Preserve the existing Android signing identity when upgrading enrolled phones; do not uninstall with unresolved payment outcomes.
+
+
+### Verified 1.5.1 artifact
+
+[Download the built APK from the campus branch](https://github.com/Shikharyadav25/BeyondNet/raw/refs/heads/feat/campus-mesh/installers/BeyondNet-Android-1.5.1.apk).
+
+- [Successful APK workflow](https://github.com/Shikharyadav25/BeyondNet/actions/runs/40903453585): Flutter analysis passed; **142 tests passed, zero skipped/errors**; release build and installer commit succeeded.
+- Java: the 51 existing bank/campus tests passed, followed by the two new QR tests (and five campus regression tests). Live HTTP suites: **7 passed** across bank and campus. The setup script was exercised twice, and campus restart retained the authority and accounts.
+- APK SHA-256: `69118a888891916552d224a967439ad1139d3c87aeb924899b81243392deabd3`. Its ZIP integrity was verified after fetching the generated installer commit `baeec1e`.
+- 1.5.0 signer certificate SHA-256: `17fd7b17e1e09bb580e77590dec9e27f57dddcf0a5fdfaa587821753814f612e`.
+- 1.5.1 signer certificate SHA-256: `67d8e5b3d42b211b5f83e089a0085311b3d7d954e4cb049173bfb40f52610300`.
+- Physical BLE, camera scanning on hardware and a live user-owned ngrok tunnel remain untested. No ngrok token or original signing keystore was supplied; neither was fabricated. Local Flutter SDK setup remains blocked until the saved `storage.googleapis.com` network addition is applied. Mobile validation and compilation above ran on GitHub Actions.
