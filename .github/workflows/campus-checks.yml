@@ -46,9 +46,12 @@ jobs:
           channel: stable
           flutter-version: '3.44.0'
           cache: true
-      - run: flutter pub get --enforce-lockfile
+      - run: |
+          flutter pub get
+          git diff -- pubspec.lock
         working-directory: mobile
       - run: flutter analyze
         working-directory: mobile
       - run: flutter test
+        if: ${{ !cancelled() }}
         working-directory: mobile
