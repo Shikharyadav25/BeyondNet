@@ -9,6 +9,8 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'engine.dart';
+import 'campus/campus_engine.dart';
+import 'campus/campus_page.dart';
 import 'payment_pin.dart';
 import 'bank_setup_code.dart';
 import 'bank_setup_scan.dart';
@@ -22,9 +24,8 @@ const ink = Color(0xff143b3b),
     muted = Color(0xff788b86);
 String rupees(dynamic paise) => '₹${((paise as num) / 100).toStringAsFixed(2)}';
 String stamp(dynamic seconds) {
-  final d = DateTime.fromMillisecondsSinceEpoch(
-    (seconds as int) * 1000,
-  ).toLocal();
+  final d = DateTime.fromMillisecondsSinceEpoch((seconds as int) * 1000)
+      .toLocal();
   return '${d.day}/${d.month} · ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
 }
 
@@ -173,12 +174,7 @@ class _BeyondNetAppState extends State<BeyondNetApp>
             body: Center(child: CircularProgressIndicator()),
           );
         }
-        return ListenableBuilder(
-          listenable: engine,
-          builder: (context, _) => engine.profile == null
-              ? LoginPage(engine: engine)
-              : Shell(engine: engine),
-        );
+        return ModeChooser(engine: engine);
       },
     ),
   );
@@ -555,8 +551,7 @@ class _LoginState extends State<LoginPage> {
               ),
               const SizedBox(height: 8),
               Hint(
-                bankSetupStatus ??
-                    'Scan or choose the bank setup QR to fill both fields, or enter them manually.',
+                bankSetupStatus ?? 'Scan or choose the bank setup QR to fill both fields, or enter them manually.',
               ),
               const SizedBox(height: 14),
               TextField(
@@ -604,8 +599,7 @@ class _LoginState extends State<LoginPage> {
                 maxLines: 2,
                 decoration: const InputDecoration(
                   labelText: 'Bank trust fingerprint',
-                  hintText:
-                      'Paste the 64-character fingerprint from Device setup on the laptop',
+                  hintText: 'Paste the 64-character fingerprint from Device setup on the laptop',
                 ),
               ),
               const SizedBox(height: 10),
@@ -2360,6 +2354,151 @@ class _ScanState extends State<ScanPage> {
           ),
         ),
       ],
+    ),
+  );
+}
+
+class ModeChooser extends StatefulWidget {
+  final BeyondNetEngine engine;
+  const ModeChooser({super.key, required this.engine});
+  @override
+  State<ModeChooser> createState() => _ModeChooserState();
+}
+
+class _ModeChooserState extends State<ModeChooser> {
+  CampusEngine? campus;
+  bool opening = false;
+  void openPayments() {
+    Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: const Text('BeyondNet Payments')),
+          body: ListenableBuilder(
+            listenable: widget.engine,
+            builder: (_, _) => widget.engine.profile == null
+                ? LoginPage(engine: widget.engine)
+                : Shell(engine: widget.engine),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> openCampus() async {
+    setState(() => opening = true);
+    try {
+      if (campus == null) {
+        final candidate = CampusEngine();
+        await candidate.init();
+        campus = candidate;
+      }
+      if (!mounted) return;
+      await Navigator.push(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => CampusPage(
+            campus: campus!,
+            payments: widget.engine,
+            openPayments: openPayments,
+          ),
+        ),
+      );
+    } catch (error) {
+      if (mounted) await alert(context, error);
+    } finally {
+      if (mounted) setState(() => opening = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    campus?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: SafeArea(
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: ListView(
+            shrinkWrap: true,
+            padding: const EdgeInsets.all(28),
+            children: [
+              const Brand(),
+              const SizedBox(height: 48),
+              const Eyebrow('ONE NETWORK. MORE POSSIBILITIES.'),
+              const SizedBox(height: 14),
+              Text(
+                'Stay connected.\nBeyond the internet.',
+                style: Theme.of(context).textTheme.headlineLarge,
+              ),
+              const SizedBox(height: 16),
+              const Hint(
+                'Choose where you want to go. Nearby Bluetooth helps carry payments and campus messages when connectivity is unreliable.',
+              ),
+              const SizedBox(height: 32),
+              Box(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(
+                      Icons.account_balance_wallet_outlined,
+                      color: teal,
+                      size: 34,
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Offline Payments',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 8),
+                    const Hint(
+                      'Your wallet, merchant QR payments and encrypted bank relay.',
+                    ),
+                    const SizedBox(height: 18),
+                    FilledButton(
+                      onPressed: opening ? null : openPayments,
+                      child: const Text('Open Payments →'),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 18),
+              Box(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.school_outlined, color: teal, size: 34),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Campus',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 8),
+                    const Hint(
+                      'Section groups, assignments and trusted college notices. Join with your campus code.',
+                    ),
+                    const SizedBox(height: 18),
+                    FilledButton(
+                      onPressed: opening ? null : openCampus,
+                      child: Text(
+                        opening ? 'Opening Campus…' : 'Open Campus →',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+              const Hint(
+                'Separate identities. One familiar BeyondNet experience.',
+              ),
+            ],
+          ),
+        ),
+      ),
     ),
   );
 }

@@ -1,3 +1,5 @@
+> **Campus development branch:** the app now opens a Payments/Campus chooser. See [Campus architecture, provisioning and validation](docs/CAMPUS.md) for the pilot setup and current limits. Existing installer APKs predate this branch.
+
 # BeyondNet
 
 **Initiate payments offline. Carry encrypted requests through nearby phones. Settle when a gateway reaches the bank.**

@@ -78,7 +78,7 @@ public class RequestLimits extends OncePerRequestFilter {
       return;
     }
     if (path.startsWith("/api/")) {
-      boolean authentication = List.of("/api/login", "/api/signup", "/api/pin").contains(path);
+      boolean authentication = List.of("/api/login", "/api/signup", "/api/pin", "/api/campus/enroll").contains(path);
       int limit = authentication ? 60 : 240;
       long time = System.nanoTime();
       if (!allow(clientIp(request) + "|" + route(path), limit, time)) {
@@ -89,7 +89,7 @@ public class RequestLimits extends OncePerRequestFilter {
         String subject = request.getHeader("Authorization");
         if (!path.equals("/api/pin")) {
           try {
-            Object account = parse(new String(body, java.nio.charset.StandardCharsets.UTF_8)).get("account");
+            Object account = parse(new String(body, java.nio.charset.StandardCharsets.UTF_8)).get(path.equals("/api/campus/enroll") ? "id" : "account");
             subject = account instanceof String id ? id.strip().toLowerCase(Locale.ROOT) : null;
           } catch (BankException ignored) { }
         }

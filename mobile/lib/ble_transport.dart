@@ -75,6 +75,15 @@ abstract interface class PeerTransport {
 }
 
 class BleTransport implements PeerTransport {
+  final bool campus;
+  UUID get _serviceId => campus
+      ? UUID.fromString('f953c620-4f9e-4ac8-a6d6-6f666b61726f')
+      : serviceId;
+  UUID get _rpcId =>
+      campus ? UUID.fromString('f953c621-4f9e-4ac8-a6d6-6f666b61726f') : rpcId;
+  UUID get _indexedRpcId => campus
+      ? UUID.fromString('f953c622-4f9e-4ac8-a6d6-6f666b61726f')
+      : indexedRpcId;
   final CentralManager central;
   final PeripheralManager peripheral;
   final AndroidBleSession? androidSession;
@@ -96,6 +105,7 @@ class BleTransport implements PeerTransport {
   BleTransport(
     this.handler,
     this.onEvent, {
+    this.campus = false,
     CentralManager? central,
     PeripheralManager? peripheral,
     AndroidBleSession? androidSession,
@@ -133,9 +143,9 @@ class BleTransport implements PeerTransport {
         // the controller. A peer's name also helps when scan records omit the
         // UUID; the signed device certificate still authenticates the peer.
         if (!e.advertisement.serviceUUIDs.any(
-              (uuid) => uuid.toString() == serviceId.toString(),
+              (uuid) => uuid.toString() == _serviceId.toString(),
             ) &&
-            e.advertisement.name != 'BeyondNet') {
+            (campus || e.advertisement.name != 'BeyondNet')) {
           return;
         }
         final id = e.peripheral.uuid.toString();
@@ -145,12 +155,12 @@ class BleTransport implements PeerTransport {
     subscriptions.add(
       peripheral.characteristicWriteRequested.listen((e) async {
         final id = e.central.uuid.toString();
-        if (e.characteristic.uuid == indexedRpcId) {
+        if (e.characteristic.uuid == _indexedRpcId) {
           await _indexedWrite(e, id);
           return;
         }
         try {
-          if (e.characteristic.uuid != rpcId ||
+          if (e.characteristic.uuid != _rpcId ||
               e.request.offset != 0 ||
               processing.contains(id)) {
             throw const FormatException('Invalid write');
@@ -168,9 +178,8 @@ class BleTransport implements PeerTransport {
               final request = Map<String, dynamic>.from(
                 jsonDecode(utf8.decode(value)),
               );
-              final result = await handler(
-                request,
-              ).timeout(const Duration(seconds: 20));
+              final result = await handler(request)
+                  .timeout(const Duration(seconds: 20));
               outgoing[id] = frames(canonical(result));
             } catch (_) {
               outgoing[id] = frames(
@@ -195,7 +204,7 @@ class BleTransport implements PeerTransport {
         touched[id] = DateTime.now();
         try {
           final q = outgoing[id];
-          final value = e.characteristic.uuid == indexedRpcId
+          final value = e.characteristic.uuid == _indexedRpcId
               ? indexed[id]?.read() ?? Uint8List.fromList([0])
               : (q != null && q.isNotEmpty)
               ? q.first
@@ -207,7 +216,7 @@ class BleTransport implements PeerTransport {
                 ? value.sublist(offset)
                 : Uint8List(0),
           );
-          if (e.characteristic.uuid == rpcId &&
+          if (e.characteristic.uuid == _rpcId &&
               q != null &&
               q.isNotEmpty &&
               offset == 0) {
@@ -221,7 +230,7 @@ class BleTransport implements PeerTransport {
       }),
     );
     final characteristic = GATTCharacteristic.mutable(
-      uuid: rpcId,
+      uuid: _rpcId,
       properties: [
         GATTCharacteristicProperty.read,
         GATTCharacteristicProperty.write,
@@ -243,13 +252,13 @@ class BleTransport implements PeerTransport {
           await peripheral
               .addService(
                 GATTService(
-                  uuid: serviceId,
+                  uuid: _serviceId,
                   isPrimary: true,
                   includedServices: [],
                   characteristics: [
                     characteristic,
                     GATTCharacteristic.mutable(
-                      uuid: indexedRpcId,
+                      uuid: _indexedRpcId,
                       properties: [
                         GATTCharacteristicProperty.read,
                         GATTCharacteristicProperty.write,
@@ -285,7 +294,10 @@ class BleTransport implements PeerTransport {
       }
       await peripheral
           .startAdvertising(
-            Advertisement(name: 'BeyondNet', serviceUUIDs: [serviceId]),
+            Advertisement(
+              name: campus ? 'BeyondNet Campus' : 'BeyondNet',
+              serviceUUIDs: [_serviceId],
+            ),
           )
           .timeout(operationTimeout);
       await central.startDiscovery().timeout(operationTimeout);
@@ -363,14 +375,12 @@ class BleTransport implements PeerTransport {
         final request = Map<String, dynamic>.from(
           jsonDecode(utf8.decode(message)),
         );
-        final result = await handler(
-          request,
-        ).timeout(const Duration(seconds: 20));
+        final result = await handler(request)
+            .timeout(const Duration(seconds: 20));
         var frameBytes = 20;
         try {
-          frameBytes = (await peripheral.getMaximumNotifyLength(
-            e.central,
-          )).clamp(20, 180);
+          frameBytes = (await peripheral.getMaximumNotifyLength(e.central))
+              .clamp(20, 180);
         } catch (_) {}
         session.response = BleFrames.encode(
           canonical(result),
@@ -424,11 +434,11 @@ class BleTransport implements PeerTransport {
           .discoverGATT(p)
           .timeout(const Duration(seconds: 10));
       final characteristics = services
-          .firstWhere((s) => s.uuid == serviceId)
+          .firstWhere((s) => s.uuid == _serviceId)
           .characteristics;
-      final reliable = characteristics.any((c) => c.uuid == indexedRpcId);
+      final reliable = characteristics.any((c) => c.uuid == _indexedRpcId);
       final characteristic = characteristics.firstWhere(
-        (c) => c.uuid == (reliable ? indexedRpcId : rpcId),
+        (c) => c.uuid == (reliable ? _indexedRpcId : _rpcId),
       );
       var frameBytes = 20;
       if (reliable && Platform.isAndroid) {
