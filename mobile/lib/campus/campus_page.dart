@@ -40,8 +40,12 @@ class _CampusPageState extends State<CampusPage> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Campus runs in the foreground; never imply reliable background delivery.
-    if (state == AppLifecycleState.paused) unawaited(c.stopNearby());
-    if (state == AppLifecycleState.resumed) unawaited(c.tick());
+    if (state == AppLifecycleState.paused) {
+      unawaited(c.stopNearby());
+    }
+    if (state == AppLifecycleState.resumed) {
+      unawaited(c.tick());
+    }
   }
 
   @override
@@ -59,7 +63,7 @@ class _CampusPageState extends State<CampusPage> with WidgetsBindingObserver {
     try {
       await action();
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         await showDialog<void>(
           context: context,
           builder: (ctx) => AlertDialog(
@@ -73,8 +77,11 @@ class _CampusPageState extends State<CampusPage> with WidgetsBindingObserver {
             ],
           ),
         );
+      }
     } finally {
-      if (mounted) setState(() => busy = false);
+      if (mounted) {
+        setState(() => busy = false);
+      }
     }
   }
 
@@ -220,7 +227,9 @@ class _CampusPageState extends State<CampusPage> with WidgetsBindingObserver {
   );
   Widget feed(BuildContext context) {
     final groupIds = c.groups.keys.toList();
-    if (!groupIds.contains(selected)) selected = groupIds.firstOrNull;
+    if (!groupIds.contains(selected)) {
+      selected = groupIds.firstOrNull;
+    }
     final items = c.messages.where((m) => m['group'] == selected).toList();
     return ListView(
       padding: const EdgeInsets.all(24),
@@ -262,8 +271,9 @@ class _CampusPageState extends State<CampusPage> with WidgetsBindingObserver {
                                 return;
                               }
                               await NearbyPermissions.ensureAndroidReady();
-                              if (widget.payments.relayEnabled)
+                              if (widget.payments.relayEnabled) {
                                 await widget.payments.stopRelay();
+                              }
                               await c.startNearby();
                             }),
                       icon: Icon(
@@ -308,7 +318,9 @@ class _CampusPageState extends State<CampusPage> with WidgetsBindingObserver {
                 ? null
                 : () => run(() async {
                     await c.stopNearby();
-                    if (mounted) widget.openPayments();
+                    if (mounted) {
+                      widget.openPayments();
+                    }
                   }),
           ),
         ),

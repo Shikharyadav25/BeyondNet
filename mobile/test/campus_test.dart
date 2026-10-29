@@ -83,7 +83,9 @@ void main() {
     (tester) async {
       final payments = BeyondNetEngine();
       await tester.pumpWidget(MaterialApp(home: ModeChooser(engine: payments)));
+      await tester.scrollUntilVisible(find.text('Open Campus →'), 250);
       expect(find.text('Open Campus →'), findsOneWidget);
+      await tester.scrollUntilVisible(find.text('Open Payments →'), -250);
       await tester.tap(find.text('Open Payments →'));
       await tester.pumpAndSettle();
       expect(find.byType(LoginPage), findsOneWidget);

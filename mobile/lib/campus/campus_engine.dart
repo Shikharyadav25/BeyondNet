@@ -55,13 +55,16 @@ class CampusEngine extends ChangeNotifier {
     key = seed == null
         ? await ed.newKeyPair()
         : await ed.newKeyPairFromSeed(base64Decode(seed));
-    if (seed == null)
+    if (seed == null) {
       await secure.write(
         key: 'campus_device_seed',
         value: base64Encode((await key.extract()).bytes),
       );
+    }
     final saved = await secure.read(key: 'campus_session');
-    if (saved != null) session = Map<String, dynamic>.from(jsonDecode(saved));
+    if (saved != null) {
+      session = Map<String, dynamic>.from(jsonDecode(saved));
+    }
     await reload();
     timer = Timer.periodic(
       const Duration(seconds: 12),
@@ -95,28 +98,34 @@ class CampusEngine extends ChangeNotifier {
                     body: jsonEncode(body),
                   ))
             .timeout(const Duration(seconds: 12));
-    if (response.bodyBytes.length > 16384)
+    if (response.bodyBytes.length > 16384) {
       throw StateError('Campus response too large.');
+    }
     final result = Map<String, dynamic>.from(jsonDecode(response.body));
-    if (response.statusCode != 200)
+    if (response.statusCode != 200) {
       throw StateError(result['detail'] ?? 'Campus service unavailable');
+    }
     return result;
   }
 
   Future<void> discover(String url, String code, String fingerprint) async {
     code = code.trim().toUpperCase();
-    if (!RegExp(r'^[A-Z0-9-]{3,32}$').hasMatch(code))
+    if (!RegExp(r'^[A-Z0-9-]{3,32}$').hasMatch(code)) {
       throw StateError('Enter your college campus code.');
+    }
     final c = await api(url, '/api/campus/$code');
     final hash = hex(
       (await Sha256().hash(base64Decode(c['public_key']))).bytes,
     );
-    if (hash != fingerprint.trim().toLowerCase())
+    if (hash != fingerprint.trim().toLowerCase()) {
       throw StateError(
         'Campus fingerprint does not match. Check the details with your college.',
       );
+    }
     discoveredCampus = {...c, 'url': url.trim()};
-    if (!_disposed) notifyListeners();
+    if (!_disposed) {
+      notifyListeners();
+    }
   }
 
   Future<void> enroll(String id, String password, String role) async {
@@ -136,10 +145,11 @@ class CampusEngine extends ChangeNotifier {
         body['role'] != role ||
         body['public_key'] !=
             base64Encode((await key.extractPublicKey()).bytes) ||
-        body['expires_at'] <= nowSeconds)
+        body['expires_at'] <= nowSeconds) {
       throw StateError(
         'Your college roster does not match this role or device.',
       );
+    }
     session = {
       ...result,
       'code': c['code'],
@@ -153,16 +163,18 @@ class CampusEngine extends ChangeNotifier {
   bool canPost(String group) =>
       enrolled && (member['write'] as List).contains(group);
   Future<Json> validate(Json p) async {
-    if (canonical(p).length > 8192 || await digest(p['signed']) != p['id'])
+    if (canonical(p).length > 8192 || await digest(p['signed']) != p['id']) {
       throw const FormatException('Invalid campus packet');
+    }
     final cert = await verify(
       authority,
       Map<String, dynamic>.from(p['certificate']),
     );
     if (cert['type'] != 'beyondnet/campus-member/v1' ||
         cert['campus'] != campus ||
-        cert['expires_at'] <= nowSeconds)
+        cert['expires_at'] <= nowSeconds) {
       throw const FormatException('Invalid campus membership');
+    }
     final b = await verify(
       cert['public_key'],
       Map<String, dynamic>.from(p['signed']),
@@ -178,10 +190,11 @@ class CampusEngine extends ChangeNotifier {
         b['expires_at'] > b['created_at'] + 86400 ||
         b['expires_at'] <= b['created_at'] ||
         b['created_at'] < cert['issued_at'] ||
-        b['created_at'] > nowSeconds + 120)
+        b['created_at'] > nowSeconds + 120) {
       throw const FormatException(
         'Invalid campus message permissions or lifetime',
       );
+    }
     return b;
   }
 
@@ -195,13 +208,16 @@ class CampusEngine extends ChangeNotifier {
         where: 'id=?',
         whereArgs: [p['id']],
       );
-      if (exists.isNotEmpty) return;
+      if (exists.isNotEmpty) {
+        return;
+      }
       if ((Sqflite.firstIntValue(
                 await tx.rawQuery('SELECT COUNT(*) FROM packets'),
               ) ??
               0) >=
-          512)
+          512) {
         throw StateError('Campus cache full; wait for messages to expire.');
+      }
       await tx.insert('packets', {
         'id': p['id'],
         'campus': campus,
@@ -214,16 +230,20 @@ class CampusEngine extends ChangeNotifier {
   }
 
   Future<void> post(String group, String text, String kind) async {
-    if (!canPost(group)) throw StateError('Your campus role cannot post here.');
+    if (!canPost(group)) {
+      throw StateError('Your campus role cannot post here.');
+    }
     text = text.trim();
     if (text.isEmpty ||
         utf8.encode(text).length > 2000 ||
-        !['message', 'assignment', 'notice'].contains(kind))
+        !['message', 'assignment', 'notice'].contains(kind)) {
       throw StateError('Enter up to 2,000 bytes of text.');
+    }
     final g = Map<String, dynamic>.from(groups[group]);
     if ((kind == 'assignment' && member['role'] == 'student') ||
-        (kind == 'notice' && !['hod', 'authority'].contains(member['role'])))
+        (kind == 'notice' && !['hod', 'authority'].contains(member['role']))) {
       throw StateError('Your campus role cannot publish this type.');
+    }
     final aad = canonical({
       'campus': campus,
       'group': group,
@@ -269,7 +289,9 @@ class CampusEngine extends ChangeNotifier {
             jsonDecode(row['data'] as String),
           );
           final b = await validate(p);
-          if (!groups.containsKey(b['group'])) continue;
+          if (!groups.containsKey(b['group'])) {
+            continue;
+          }
           final box = b['box'], ct = base64Decode(box['ciphertext']);
           final content = await AesGcm.with256bits().decrypt(
             SecretBox(
@@ -290,8 +312,9 @@ class CampusEngine extends ChangeNotifier {
           final sender = p['certificate']['body'];
           if (plain['kind'] == 'assignment' && sender['role'] == 'student' ||
               plain['kind'] == 'notice' &&
-                  !['hod', 'authority'].contains(sender['role']))
+                  !['hod', 'authority'].contains(sender['role'])) {
             continue;
+          }
           messages.add({
             ...b,
             ...plain,
@@ -313,7 +336,9 @@ class CampusEngine extends ChangeNotifier {
             : (a['created_at'] as int).compareTo(b['created_at'] as int);
       });
     }
-    if (!_disposed) notifyListeners();
+    if (!_disposed) {
+      notifyListeners();
+    }
   }
 
   Future<List<Json>> packets() async =>
@@ -339,15 +364,18 @@ class CampusEngine extends ChangeNotifier {
   };
   final Map<String, int> _replays = {};
   Future<Json> checkRpc(Json raw) async {
-    if (!enrolled) throw StateError('Renew campus access online.');
+    if (!enrolled) {
+      throw StateError('Renew campus access online.');
+    }
     final cert = await verify(
       authority,
       Map<String, dynamic>.from(raw['certificate']),
     );
     if (cert['type'] != 'beyondnet/campus-member/v1' ||
         cert['campus'] != campus ||
-        cert['expires_at'] <= nowSeconds)
+        cert['expires_at'] <= nowSeconds) {
       throw StateError('Wrong campus or expired membership.');
+    }
     final b = await verify(
       cert['public_key'],
       Map<String, dynamic>.from(raw['signed']),
@@ -356,26 +384,31 @@ class CampusEngine extends ChangeNotifier {
         b['campus'] != campus ||
         (b['at'] - nowSeconds).abs() > 120 ||
         b['nonce'] is! String ||
-        (b['nonce'] as String).length > 100)
+        (b['nonce'] as String).length > 100) {
       throw StateError('Invalid campus RPC.');
+    }
     return b;
   }
 
   Future<Json> handleRpc(Json raw) async {
-    if (!nearby) throw StateError('Campus nearby relay is off.');
+    if (!nearby) {
+      throw StateError('Campus nearby relay is off.');
+    }
     final b = await checkRpc(raw);
     _replays.removeWhere((_, expiry) => expiry < nowSeconds);
     final replay = '${raw['certificate']['body']['public_key']}:${b['nonce']}';
-    if (_replays.containsKey(replay) || _replays.length >= 1024)
+    if (_replays.containsKey(replay) || _replays.length >= 1024) {
       throw StateError('Repeated or excessive campus request.');
+    }
     _replays[replay] = nowSeconds + 240;
     final cmd = Map<String, dynamic>.from(b['command']);
     Json result;
     switch (cmd['op']) {
       case 'inventory':
         final offset = cmd['offset'];
-        if (offset is! int || offset < 0 || offset > 512)
+        if (offset is! int || offset < 0 || offset > 512) {
           throw StateError('Invalid inventory cursor');
+        }
         final all = await packets();
         result = {
           'ids': all.skip(offset).take(16).map((p) => p['id']).toList(),
@@ -397,8 +430,9 @@ class CampusEngine extends ChangeNotifier {
   }
 
   Future<void> startNearby() async {
-    if (!enrolled)
+    if (!enrolled) {
       throw StateError('Enroll or renew campus access online first.');
+    }
     try {
       await radio.start();
       nearby = true;
@@ -407,22 +441,30 @@ class CampusEngine extends ChangeNotifier {
       await radio.stop();
       rethrow;
     }
-    if (!_disposed) notifyListeners();
+    if (!_disposed) {
+      notifyListeners();
+    }
     unawaited(tick());
   }
 
   Future<void> stopNearby() async {
     nearby = false;
     await _radio?.stop();
-    if (!_disposed) notifyListeners();
+    if (!_disposed) {
+      notifyListeners();
+    }
   }
 
   int peerRound = 0;
   final Map<String, int> offsets = {};
   final Map<String, int> offers = {};
   Future<void> tick() async {
-    if (_ticking) return _tickDone!.future;
-    if (!enrolled || _disposed) return;
+    if (_ticking) {
+      return _tickDone!.future;
+    }
+    if (!enrolled || _disposed) {
+      return;
+    }
     _ticking = true;
     final done = _tickDone = Completer<void>();
     try {
@@ -462,21 +504,24 @@ class CampusEngine extends ChangeNotifier {
         if (body['type'] != 'beyondnet/campus-receipt/v1' ||
             body['request_id'] != rid ||
             body['after'] is! int ||
-            body['after'] < cursor)
+            body['after'] < cursor) {
           throw StateError('Invalid campus receipt');
-        if (body['packet'] != null)
+        }
+        if (body['packet'] != null) {
           await accept(
             Map<String, dynamic>.from(body['packet']),
             state: 'Server accepted',
           );
+        }
         await db.transaction((tx) async {
-          if (pending.isNotEmpty && body['accepted'] == pending.first['id'])
+          if (pending.isNotEmpty && body['accepted'] == pending.first['id']) {
             await tx.update(
               'packets',
               {'state': 'Server accepted'},
               where: 'id=?',
               whereArgs: [body['accepted']],
             );
+          }
           await tx.insert('config', {
             'id': cursorKey,
             'value': '${body['after']}',
@@ -501,8 +546,9 @@ class CampusEngine extends ChangeNotifier {
               Future<Json> call(Json cmd) async {
                 final nonce = randomCapability();
                 final b = await checkRpc(await send(await rpc(cmd, nonce)));
-                if (b['nonce'] != nonce)
+                if (b['nonce'] != nonce) {
                   throw StateError('Campus response mismatch');
+                }
                 return Map<String, dynamic>.from(b['command']);
               }
 
@@ -511,27 +557,31 @@ class CampusEngine extends ChangeNotifier {
                 'offset': offsets[peerId] ?? 0,
               });
               final ids = (inventory['ids'] as List).cast<String>();
-              if (ids.length > 16) throw StateError('Invalid inventory');
+              if (ids.length > 16) {
+                throw StateError('Invalid inventory');
+              }
               offsets[peerId] = inventory['next'] as int;
               final local = await packets();
               final known = local.map((p) => p['id']).toSet();
               for (final id in ids.where((id) => !known.contains(id)).take(2)) {
                 final r = await call({'op': 'get', 'id': id});
-                if (r['packet'] != null)
+                if (r['packet'] != null) {
                   await accept(Map<String, dynamic>.from(r['packet']));
+                }
               }
               if (local.isNotEmpty) {
                 final index = (offers[peerId] ?? 0) % local.length;
                 offers[peerId] = index + 1;
                 final p = local[index];
                 final result = await call({'op': 'offer', 'packet': p});
-                if (result['accepted'] == p['id'])
+                if (result['accepted'] == p['id']) {
                   await db.update(
                     'packets',
                     {'state': 'Copied to a peer'},
                     where: "id=? AND state='Saved locally'",
                     whereArgs: [p['id']],
                   );
+                }
               }
             });
           } catch (_) {
@@ -542,7 +592,9 @@ class CampusEngine extends ChangeNotifier {
       await reload();
     } catch (_) {
       status = 'Campus sync interrupted · saved messages will retry';
-      if (!_disposed) notifyListeners();
+      if (!_disposed) {
+        notifyListeners();
+      }
     } finally {
       _ticking = false;
       done.complete();
@@ -551,7 +603,9 @@ class CampusEngine extends ChangeNotifier {
 
   Future<void> leave() async {
     await stopNearby();
-    if (_ticking) await _tickDone!.future;
+    if (_ticking) {
+      await _tickDone!.future;
+    }
     session = null;
     await secure.delete(key: 'campus_session');
     await db.delete('packets');
@@ -564,7 +618,9 @@ class CampusEngine extends ChangeNotifier {
     _disposed = true;
     timer?.cancel();
     nearby = false;
-    if (_radio != null) unawaited(_radio!.stop());
+    if (_radio != null) {
+      unawaited(_radio!.stop());
+    }
     client.close();
     super.dispose();
   }
