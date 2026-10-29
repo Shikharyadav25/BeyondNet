@@ -47,6 +47,13 @@ jobs:
         working-directory: mobile
       - run: flutter analyze
         working-directory: mobile
-      - run: flutter test
+      - name: Flutter tests with failure annotations
         working-directory: mobile
+        run: |
+          set +e
+          flutter test --machine > "$RUNNER_TEMP/flutter-tests.json"
+          result=$?
+          set -e
+          python3 ../scripts/report-flutter-tests.py "$RUNNER_TEMP/flutter-tests.json"
+          exit "$result"
       - run: python -m pytest -q tests/test_dart_interop.py
