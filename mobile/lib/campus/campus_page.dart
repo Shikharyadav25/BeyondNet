@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import '../engine.dart';
 import '../nearby_permissions.dart';
 import 'campus_engine.dart';
+import 'campus_setup_code.dart';
+import 'campus_setup_scan.dart';
 
 class CampusPage extends StatefulWidget {
   final CampusEngine campus;
@@ -82,6 +84,47 @@ class _CampusPageState extends State<CampusPage> with WidgetsBindingObserver {
       if (mounted) {
         setState(() => busy = false);
       }
+    }
+  }
+
+  Future<void> importSetup(bool image) async {
+    final raw = image
+        ? await pickCampusSetupImage()
+        : mounted
+        ? await Navigator.push<String>(context,
+            MaterialPageRoute(builder: (_) => const CampusSetupScanPage()))
+        : null;
+    if (raw == null || !mounted) return;
+    final setup = CampusSetupCode.parse(raw);
+    code.text = setup.code;
+    url.text = setup.url;
+    fingerprint.text = setup.fingerprint;
+    // Verify the authority before showing a form that accepts a password.
+    await c.discover(setup.url, setup.code, setup.fingerprint);
+  }
+
+  Future<void> renew() async {
+    final secret = TextEditingController();
+    final server = TextEditingController(text: c.session!['url']);
+    try {
+      final accepted = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+        title: const Text('Renew campus connection'),
+        content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text('Use the current college HTTPS URL and your Campus password. Saved messages stay on this phone.'),
+          field(server, 'College server HTTPS URL'),
+          field(secret, 'Campus password', secret: true),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Renew')),
+        ],
+      ));
+      if (accepted == true) await c.renew(secret.text, server.text);
+    } finally {
+      // Let the dialog route finish removing its TextFields before disposal.
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      secret.dispose();
+      server.dispose();
     }
   }
 
@@ -166,6 +209,17 @@ class _CampusPageState extends State<CampusPage> with WidgetsBindingObserver {
       ),
       const SizedBox(height: 24),
       if (c.discoveredCampus == null) ...[
+        FilledButton.icon(
+          onPressed: busy ? null : () => run(() => importSetup(false)),
+          icon: const Icon(Icons.qr_code_scanner),
+          label: const Text('Scan college setup QR'),
+        ),
+        OutlinedButton.icon(
+          onPressed: busy ? null : () => run(() => importSetup(true)),
+          icon: const Icon(Icons.image_outlined),
+          label: const Text('Choose campus QR image'),
+        ),
+        const SizedBox(height: 16),
         field(code, 'Campus code'),
         field(url, 'College server HTTPS URL'),
         field(fingerprint, 'Campus fingerprint (from your college)'),
@@ -258,9 +312,14 @@ class _CampusPageState extends State<CampusPage> with WidgetsBindingObserver {
                   spacing: 8,
                   children: [
                     OutlinedButton.icon(
-                      onPressed: busy ? null : () => run(() => c.tick()),
+                      onPressed: busy ? null : () => run(() => c.tick(force: true)),
                       icon: const Icon(Icons.sync),
                       label: const Text('Sync now'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: busy ? null : () => run(renew),
+                      icon: const Icon(Icons.key),
+                      label: const Text('Renew / update connection'),
                     ),
                     OutlinedButton.icon(
                       onPressed: busy
@@ -301,7 +360,7 @@ class _CampusPageState extends State<CampusPage> with WidgetsBindingObserver {
               leading: const Icon(Icons.lock_clock),
               title: const Text('Renew campus access online'),
               subtitle: const Text(
-                'Leave this campus and join again with the current college credentials.',
+                'Use Renew / update connection with your college credentials. Saved messages are retained.',
               ),
             ),
           ),

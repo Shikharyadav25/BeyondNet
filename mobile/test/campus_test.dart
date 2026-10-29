@@ -134,6 +134,29 @@ void main() {
     await student.reload();
     expect(student.messages.single['text'], 'Read chapter 2');
   });
+  test('offline RPC carries an encrypted assignment across two relays', () async {
+    await professor.post('faculty', 'Offline PSIT assignment', 'assignment');
+    final packet = (await professor.packets()).single;
+    relay.nearby = true;
+    student.nearby = true;
+    final first = await relay.handleRpc(await professor.rpc({
+      'op': 'offer', 'packet': packet,
+    }, 'professor-to-relay'));
+    expect((await professor.checkRpc(first))['command']['accepted'], packet['id']);
+    final inventory = await relay.handleRpc(await student.rpc({
+      'op': 'inventory', 'offset': 0,
+    }, 'student-inventory'));
+    expect((await student.checkRpc(inventory))['command']['ids'], contains(packet['id']));
+    final fetched = await relay.handleRpc(await student.rpc({
+      'op': 'get', 'id': packet['id'],
+    }, 'student-fetch'));
+    await student.accept(Map<String, dynamic>.from(
+      (await student.checkRpc(fetched))['command']['packet']));
+    await student.reload();
+    expect(student.messages.single['text'], 'Offline PSIT assignment');
+    expect(relay.messages, isEmpty);
+    expect(jsonEncode((await relay.packets()).single), isNot(contains('Offline PSIT assignment')));
+  });
   test(
     'signature tampering, wrong campus and oversize content are rejected',
     () async {

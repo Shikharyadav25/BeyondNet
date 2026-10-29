@@ -2,6 +2,8 @@
 
 # BeyondNet
 
+Campus branch: [PSIT Kanpur server, independent tunnel, credentials and QR setup](docs/PSIT_CAMPUS.md). Campus update: 1.5.1 (build 21); see the guide for APK build status and physical acceptance requirements.
+
 **Initiate payments offline. Carry encrypted requests through nearby phones. Settle when a gateway reaches the bank.**
 
 BeyondNet is an Android payment proof of concept for environments with unreliable internet access. An offline phone sends a signed, encrypted payment request through a chain of enrolled Bluetooth devices. A phone with internet submits it to the Java demo bank, which records the outcome in PostgreSQL and returns a signed receipt through the available network.

@@ -42,7 +42,7 @@ jobs:
           flutter-version: '3.44.0'
           cache: true
       - run: mvn -B -f backend/pom.xml package
-      - run: python -m pytest -q tests/test_java_bank.py
+      - run: python -m pytest -q tests/test_java_bank.py tests/test_campus_server.py
       - run: flutter pub get --enforce-lockfile
         working-directory: mobile
       - run: flutter analyze

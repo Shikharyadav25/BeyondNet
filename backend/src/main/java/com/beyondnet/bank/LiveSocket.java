@@ -13,6 +13,7 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 import org.springframework.web.socket.handler.ConcurrentWebSocketSessionDecorator;
 
 @Component
+@org.springframework.context.annotation.Profile("!campus")
 public class LiveSocket extends TextWebSocketHandler {
   private final BankService bank;
   private final Map<String, State> clients = new ConcurrentHashMap<>();
@@ -200,6 +201,7 @@ public class LiveSocket extends TextWebSocketHandler {
   }
 
   @Configuration
+  @org.springframework.context.annotation.Profile("!campus")
   @EnableWebSocket
   public static class Config implements WebSocketConfigurer {
     private final LiveSocket live;

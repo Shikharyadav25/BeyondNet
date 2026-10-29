@@ -160,6 +160,16 @@ class CampusEngine extends ChangeNotifier {
     await reload();
   }
 
+  Future<void> renew(String password, String url) async {
+    if (session == null) throw StateError('Join your campus first.');
+    final current = member;
+    final fingerprint = hex((await Sha256().hash(base64Decode(authority))).bytes);
+    await discover(url, campus, fingerprint);
+    await enroll(current['id'], password, current['role']);
+    _serverRetryAt = 0;
+    await tick(force: true);
+  }
+
   bool canPost(String group) =>
       enrolled && (member['write'] as List).contains(group);
   Future<Json> validate(Json p) async {
@@ -254,11 +264,12 @@ class CampusEngine extends ChangeNotifier {
       secretKey: SecretKey(base64Decode(g['key'])),
       aad: aad,
     );
+    final created = nowSeconds;
     final signed = await sign(key, {
       'type': 'beyondnet/campus-message/v1',
       'campus': campus,
       'group': group,
-      'created_at': nowSeconds,
+      'created_at': created,
       'expires_at': member['expires_at'],
       'nonce_id': randomCapability(),
       'priority': kind == 'notice' ? 1 : 0,
@@ -458,7 +469,8 @@ class CampusEngine extends ChangeNotifier {
   int peerRound = 0;
   final Map<String, int> offsets = {};
   final Map<String, int> offers = {};
-  Future<void> tick() async {
+  int _serverRetryAt = 0;
+  Future<void> tick({bool force = false}) async {
     if (_ticking) {
       return _tickDone!.future;
     }
@@ -491,53 +503,56 @@ class CampusEngine extends ChangeNotifier {
           ? 0
           : int.parse(saved.first['value'] as String);
       final rid = randomCapability();
-      try {
-        final result = await api(session!['url'], '/api/campus/sync', {
-          'code': campus,
-          'certificate': session!['certificate'],
-          'request': await sign(key, {
-            'type': 'beyondnet/campus-sync/v1',
-            'campus': campus,
-            'at': nowSeconds,
-            'request_id': rid,
-            'after': cursor,
-            'packet': pending.isEmpty
-                ? null
-                : jsonDecode(pending.first['data'] as String),
-          }),
-        });
-        final body = await verify(authority, result);
-        if (body['type'] != 'beyondnet/campus-receipt/v1' ||
-            body['request_id'] != rid ||
-            body['after'] is! int ||
-            body['after'] < cursor) {
-          throw StateError('Invalid campus receipt');
-        }
-        if (body['packet'] != null) {
-          await accept(
-            Map<String, dynamic>.from(body['packet']),
-            state: 'Server accepted',
-          );
-        }
-        await db.transaction((tx) async {
-          if (pending.isNotEmpty && body['accepted'] == pending.first['id']) {
-            await tx.update(
-              'packets',
-              {'state': 'Server accepted'},
-              where: 'id=?',
-              whereArgs: [body['accepted']],
+      if (force || nowSeconds >= _serverRetryAt) {
+        try {
+          final result = await api(session!['url'], '/api/campus/sync', {
+            'code': campus,
+            'certificate': session!['certificate'],
+            'request': await sign(key, {
+              'type': 'beyondnet/campus-sync/v1',
+              'campus': campus,
+              'at': nowSeconds,
+              'request_id': rid,
+              'after': cursor,
+              'packet': pending.isEmpty
+                  ? null
+                  : jsonDecode(pending.first['data'] as String),
+            }),
+          });
+          final body = await verify(authority, result);
+          if (body['type'] != 'beyondnet/campus-receipt/v1' ||
+              body['request_id'] != rid ||
+              body['after'] is! int ||
+              body['after'] < cursor) {
+            throw StateError('Invalid campus receipt');
+          }
+          if (body['packet'] != null) {
+            await accept(
+              Map<String, dynamic>.from(body['packet']),
+              state: 'Server accepted',
             );
           }
-          await tx.insert('config', {
-            'id': cursorKey,
-            'value': '${body['after']}',
-          }, conflictAlgorithm: ConflictAlgorithm.replace);
-        });
-        status = 'Campus server synchronized';
-      } catch (_) {
-        status = nearby
-            ? 'Server unavailable · carrying messages nearby'
-            : 'Server unavailable · messages saved on this phone';
+          await db.transaction((tx) async {
+            if (pending.isNotEmpty && body['accepted'] == pending.first['id']) {
+              await tx.update(
+                'packets',
+                {'state': 'Server accepted'},
+                where: 'id=?',
+                whereArgs: [body['accepted']],
+              );
+            }
+            await tx.insert('config', {
+              'id': cursorKey,
+              'value': '${body['after']}',
+            }, conflictAlgorithm: ConflictAlgorithm.replace);
+          });
+          status = 'Campus server synchronized';
+        } catch (_) {
+          _serverRetryAt = nowSeconds + 30;
+          status = nearby
+              ? 'Server unavailable · carrying messages nearby'
+              : 'Server unavailable · messages saved on this phone';
+        }
       }
       if (nearby && radio.running) {
         final peers = radio.discovered.values
@@ -549,9 +564,16 @@ class CampusEngine extends ChangeNotifier {
                   .toString();
           try {
             await radio.connect(peer, (send) async {
+              String? connectedKey;
               Future<Json> call(Json cmd) async {
                 final nonce = randomCapability();
-                final b = await checkRpc(await send(await rpc(cmd, nonce)));
+                final response = await send(await rpc(cmd, nonce));
+                final b = await checkRpc(response);
+                final peerKey = response['certificate']['body']['public_key'] as String;
+                if (connectedKey != null && connectedKey != peerKey) {
+                  throw StateError('Campus peer identity changed during exchange');
+                }
+                connectedKey = peerKey;
                 if (b['nonce'] != nonce) {
                   throw StateError('Campus response mismatch');
                 }
@@ -572,6 +594,9 @@ class CampusEngine extends ChangeNotifier {
               for (final id in ids.where((id) => !known.contains(id)).take(2)) {
                 final r = await call({'op': 'get', 'id': id});
                 if (r['packet'] != null) {
+                  if (r['packet']['id'] != id) {
+                    throw StateError('Campus peer returned an unrequested packet');
+                  }
                   await accept(Map<String, dynamic>.from(r['packet']));
                 }
               }

@@ -4,9 +4,9 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 public class CampusController {
   private final CampusService campus;
-  private final BankService bank;
-  public CampusController(CampusService campus, BankService bank) {this.campus=campus;this.bank=bank;}
-  @PostMapping("/api/admin/campuses") public Object provision(@RequestHeader(value="Authorization",required=false) String h,@RequestBody Map<String,Object> b) {bank.admin(h);return campus.provision(b);}
+  private final BankDatabase db;
+  public CampusController(CampusService campus, BankDatabase db) {this.campus=campus;this.db=db;}
+  @PostMapping("/api/admin/campuses") public Object provision(@RequestHeader(value="Authorization",required=false) String h,@RequestBody Map<String,Object> b) {if (!WireCrypto.equal(BankService.bearer(h), db.operatorKey)) throw new BankException(401,"Campus operator key required");return campus.provision(b);}
   @GetMapping("/api/campus/{code}") public Object discover(@PathVariable String code) {return campus.discover(code);}
   @PostMapping("/api/campus/enroll") public Object enroll(@RequestBody Map<String,Object> b) {return campus.enroll(b);}
   @PostMapping("/api/campus/sync") public Object sync(@RequestBody Map<String,Object> b) {return campus.sync(b);}

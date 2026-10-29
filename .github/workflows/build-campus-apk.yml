@@ -21,21 +21,26 @@ jobs:
           cache: true
       - run: flutter pub get --enforce-lockfile
         working-directory: mobile
+      - run: flutter analyze
+        working-directory: mobile
+      - run: flutter test
+        working-directory: mobile
       - run: flutter build apk --release
         working-directory: mobile
       - name: Store versioned installer
         run: |
-          cp mobile/build/app/outputs/flutter-apk/app-release.apk installers/BeyondNet-Android-1.5.0.apk
+          cp mobile/build/app/outputs/flutter-apk/app-release.apk installers/BeyondNet-Android-1.5.1.apk
           cd installers
-          sha256sum BeyondNet-Android-1.5.0.apk >> SHA256SUMS.txt
+          sed -i '/  BeyondNet-Android-1.5.1.apk$/d' SHA256SUMS.txt
+          sha256sum BeyondNet-Android-1.5.1.apk >> SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: BeyondNet-Android-1.5.0
-          path: installers/BeyondNet-Android-1.5.0.apk
+          name: BeyondNet-Android-1.5.1
+          path: installers/BeyondNet-Android-1.5.1.apk
       - name: Commit installer to campus branch
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add installers/BeyondNet-Android-1.5.0.apk installers/SHA256SUMS.txt
-          git commit -m 'build: add Campus Android 1.5.0 installer [skip ci]'
+          git add installers/BeyondNet-Android-1.5.1.apk installers/SHA256SUMS.txt
+          git commit -m 'build: add Campus Android 1.5.1 installer [skip ci]'
           git push origin HEAD:feat/campus-mesh
