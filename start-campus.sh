@@ -5,6 +5,8 @@ cd "$(dirname "$0")"
 export KARO_DATA_DIR="${CAMPUS_DATA_DIR:-$PWD/data/campus-psit}"
 export BEYONDNET_DB_CONFIG="${CAMPUS_DB_CONFIG:-$PWD/data/postgres.properties}"
 export BEYONDNET_DB_SCHEMA="${CAMPUS_DB_SCHEMA:-campus_psit}"
+export CAMPUS_PUBLIC_URL="${CAMPUS_PUBLIC_URL:-$(cat data/public-url.txt)}"
+export CAMPUS_CODE="${CAMPUS_CODE:-PSIT-KANPUR}"
 export CAMPUS_PORT="${CAMPUS_PORT:-8090}"
 . ./scripts/database-config.sh
 if bank_database_is_local; then ./scripts/start-postgres.sh; fi

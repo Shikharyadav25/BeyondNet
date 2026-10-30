@@ -64,6 +64,7 @@ class FakePeripheral implements PeripheralManager {
   final reads =
       StreamController<GATTCharacteristicReadRequestedEventArgs>.broadcast();
   BluetoothLowEnergyState currentState = BluetoothLowEnergyState.poweredOn;
+  Advertisement? lastAdvertisement;
   int failedAdds = 0, adds = 0, advertisements = 0;
   int writeAcks = 0;
   int advertisementStops = 0;
@@ -110,6 +111,7 @@ class FakePeripheral implements PeripheralManager {
 
   @override
   Future<void> startAdvertising(Advertisement advertisement) async {
+    lastAdvertisement = advertisement;
     advertisements++;
     await advertiseWait;
   }
@@ -176,6 +178,12 @@ void main() {
       expect(radio.running, isTrue);
       expect(central.scans, 1);
       expect(peripheral.advertisements, 1);
+      expect(
+        peripheral.lastAdvertisement?.name,
+        isNull,
+        reason: "Startup must not depend on renaming the Android phone",
+      );
+      expect(peripheral.lastAdvertisement?.serviceUUIDs, isNotEmpty);
     },
   );
   test(
@@ -297,7 +305,7 @@ void main() {
             isA<StateError>().having(
               (e) => e.message,
               'message',
-              contains('did not finish starting'),
+              contains('Bluetooth timed out while'),
             ),
           ),
         );
@@ -428,6 +436,21 @@ void main() {
       expect(executions, 1);
     },
   );
+  test('Campus cannot replace an active Payments Bluetooth service', () async {
+    await radio.start();
+    final other = BleTransport(
+      (_) async => {},
+      (_) {},
+      campus: true,
+      central: central,
+      peripheral: peripheral,
+    );
+    final adds = peripheral.adds;
+    await expectLater(other.start(), throwsStateError);
+    await other.stop();
+    expect(radio.running, isTrue);
+    expect(peripheral.adds, adds);
+  });
   test(
     'read invalidated by disconnect does not escape the stream handler',
     () async {

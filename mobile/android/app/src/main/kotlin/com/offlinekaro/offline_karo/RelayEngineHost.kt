@@ -21,23 +21,34 @@ import io.flutter.plugin.common.MethodChannel
 /** One application-scoped engine owns SQLite, BLE and timers. The Activity is
  * only a view onto it; the foreground service retains it without an Activity. */
 object RelayEngineHost {
-    private const val INVITATIONS = "beyondnet_relay_requests"
-    private fun notice(context: Context, id: String, title: String, detail: String) {
+    private const val INVITATIONS = "beyondnet_relay_requests_v2"
+    private fun notice(context: Context, id: String, title: String, detail: String, tab: Int = 2) {
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.createNotificationChannel(NotificationChannel(
-            INVITATIONS, "Payment relay requests", NotificationManager.IMPORTANCE_DEFAULT))
-        val open = PendingIntent.getActivity(context, 0,
-            Intent(context, MainActivity::class.java),
+            INVITATIONS, "Payment relay requests", NotificationManager.IMPORTANCE_HIGH))
+        val open = PendingIntent.getActivity(context, id.hashCode(),
+            Intent(context, MainActivity::class.java).putExtra("notificationTab", tab),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         manager.notify(id.hashCode(), NotificationCompat.Builder(context, INVITATIONS)
             .setSmallIcon(R.drawable.ic_relay)
             .setContentTitle(title)
             .setContentText(detail)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(detail))
             .setContentIntent(open)
             .setAutoCancel(true)
             .build())
+    }
+    private var pendingTab: Int? = null
+    fun openNotification(intent: Intent?) {
+        if (intent?.hasExtra("notificationTab") == true) {
+            val tab = intent.getIntExtra("notificationTab", 2)
+            if (tab in 0..2) pendingTab = tab
+            intent.removeExtra("notificationTab")
+        }
     }
     private var engine: FlutterEngine? = null
     private var control: MethodChannel? = null
@@ -104,7 +115,8 @@ object RelayEngineHost {
                         // restrictions are respected when no Activity is visible.
                         if (enabled(app) && !RelayService.running && activityVisible && readiness(app) == null)
                             ContextCompat.startForegroundService(app, Intent(app, RelayService::class.java))
-                        result.success(status(app))
+                        result.success(status(app) + mapOf("notificationTab" to pendingTab))
+                        pendingTab = null
                     }
                     "status" -> result.success(status(app))
                     "start" -> {
@@ -137,9 +149,19 @@ object RelayEngineHost {
                     "noticeRequest" -> {
                         val args = call.arguments as? Map<*, *>
                         val id = args?.get("id") as? String ?: "relay"
+                        notice(app, id, "Nearby payment request",
+                            "Help carry an encrypted request. Open BeyondNet to accept or decline. Your money is never used.")
+                        result.success(true)
+                    }
+                    "noticeConnection", "noticeConnectionReady", "noticeSubmitted" -> {
+                        val args = call.arguments as? Map<*, *>
+                        val id = args?.get("id") as? String ?: "relay"
                         val name = (args?.get("name") as? String ?: "A nearby phone").take(60)
-                        notice(app, id, "Relay approval requested",
-                            "$name wants to use this phone. Open BeyondNet Nearby to allow or decline.")
+                        when (call.method) {
+                            "noticeConnection" -> notice(app, "connection:$id", "Connection approval requested", "$name wants to connect for an offline payment. Tap to accept or reject.")
+                            "noticeConnectionReady" -> notice(app, "connection-ready:$id", "Relay connection approved", "You can now make a payment without internet. Keep Bluetooth and Nearby relay on.", 0)
+                            else -> notice(app, "submitted:$id", "Payment sent to bank", "The bank returned signed receipts. BeyondNet will deliver them to the offline phone over Bluetooth.")
+                        }
                         result.success(true)
                     }
                     "noticeResult" -> {
@@ -147,7 +169,7 @@ object RelayEngineHost {
                         val id = args?.get("id") as? String ?: "payment"
                         val status = args?.get("status") as? String ?: "updated"
                         notice(app, "result:$id", "Bank payment $status",
-                            "Open BeyondNet Activity for the signed receipt.")
+                            "Open BeyondNet Activity for the signed receipt.", 1)
                         result.success(true)
                     }
                     "clearRequest" -> {

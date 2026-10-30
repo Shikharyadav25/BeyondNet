@@ -20,6 +20,11 @@ Future<void> scroll(WidgetTester tester, Finder finder, double delta) =>
 class RelayUiEngine extends BeyondNetEngine {
   Completer<void> attempt = Completer<void>();
   int stops = 0;
+  void openApprovalNotification() {
+    notificationTab = 2;
+    notifyListeners();
+  }
+
   @override
   Future<void> startRelay() async {
     relayEnabled = true;
@@ -182,13 +187,55 @@ void main() {
     return e;
   }
 
+  testWidgets('notification opens approvals directly from the mode chooser', (
+    tester,
+  ) async {
+    final e = sample(online: true, engine: RelayUiEngine()) as RelayUiEngine;
+    e.ready = true;
+    await tester.pumpWidget(
+      BeyondNetApp(engine: e, initialized: Future<void>.value()),
+    );
+    await tester.pumpAndSettle();
+    final navigator = tester.state<NavigatorState>(
+      find.byType(Navigator).first,
+    );
+    navigator.push(
+      MaterialPageRoute<void>(
+        builder: (_) => const Scaffold(body: Text('Other screen')),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Other screen'), findsOneWidget);
+    e.openApprovalNotification();
+    await tester.pumpAndSettle();
+    expect(find.text('Nearby network'), findsOneWidget);
+    expect(find.text('Other screen'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    e.dispose();
+  });
+
+  testWidgets('Offline payer opens payment form before any relay connection', (
+    tester,
+  ) async {
+    final e = sample();
+    await tester.pumpWidget(MaterialApp(home: Shell(engine: e)));
+    await scroll(tester, find.text('Pay by ID'), 180);
+    await tester.tap(find.text('Pay by ID'));
+    await tester.pumpAndSettle();
+    expect(find.text('Make a payment'), findsOneWidget);
+    expect(find.text('Recipient payment ID'), findsOneWidget);
+    expect(find.text('Accept connection'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    e.dispose();
+  });
+
   testWidgets('Offline payment directs to permissions and relay discovery', (
     tester,
   ) async {
     final e = sample();
     await tester.pumpWidget(MaterialApp(home: Shell(engine: e)));
     expect(find.text('Your internet is off'), findsOneWidget);
-    await tester.tap(find.text('Set up offline payments'));
+    await tester.tap(find.text('Nearby delivery settings'));
     await tester.pump();
     expect(find.text('Before you connect'), findsOneWidget);
     expect(find.text('Bank gateway'), findsNothing);
@@ -293,10 +340,10 @@ void main() {
       await tester.pumpWidget(MaterialApp(home: Shell(engine: e)));
       await tester.tap(find.text('Nearby'));
       await tester.pump();
-      await scroll(tester, find.text('Allow relay'), 300);
-      expect(find.text('Allow relay'), findsOneWidget);
+      await scroll(tester, find.text('Accept & carry'), 300);
+      expect(find.text('Accept & carry'), findsOneWidget);
       await scroll(tester, find.text('Alex'), 300);
-      expect(find.text('Connect for payment'), findsNothing);
+      expect(find.text('Request connection for payment'), findsNothing);
       expect(find.text('Connected · continue'), findsNothing);
       await tester.pumpWidget(const SizedBox());
       e.dispose();
@@ -316,30 +363,35 @@ void main() {
     await tester.pumpWidget(MaterialApp(home: Shell(engine: e)));
     await tester.tap(find.text('Nearby'));
     await tester.pump();
-    await scroll(tester, find.text('Request Alex · internet on'), 300);
-    expect(find.text('Request Alex · internet on'), findsOneWidget);
+    await scroll(
+      tester,
+      find.textContaining('Accepted requests are saved.'),
+      300,
+    );
+    expect(find.textContaining('Accepted requests are saved.'), findsOneWidget);
     await scroll(tester, find.text('Alex'), 300);
-    expect(find.text('Connect for payment'), findsNothing);
+    expect(find.text('Request connection for payment'), findsNothing);
     await tester.pumpWidget(const SizedBox());
     e.dispose();
   });
 
-  testWidgets('Offline payer can select a relay for its own payment', (
-    tester,
-  ) async {
-    final e = sample();
-    e.nearby = [
-      {'device_id': 'next', 'name': 'Alex', 'online': true},
-    ];
-    await tester.pumpWidget(MaterialApp(home: Shell(engine: e)));
-    await tester.tap(find.text('Nearby'));
-    await tester.pump();
-    await scroll(tester, find.text('Connect for payment'), 300);
-    expect(find.text('Connect for payment'), findsOneWidget);
-    expect(find.text('Allow relay'), findsNothing);
-    await tester.pumpWidget(const SizedBox());
-    e.dispose();
-  });
+  testWidgets(
+    'Offline nearby discovery does not require a connection approval',
+    (tester) async {
+      final e = sample();
+      e.nearby = [
+        {'device_id': 'next', 'name': 'Alex', 'online': true},
+      ];
+      await tester.pumpWidget(MaterialApp(home: Shell(engine: e)));
+      await tester.tap(find.text('Nearby'));
+      await tester.pump();
+      await scroll(tester, find.text('Alex'), 300);
+      expect(find.text('Request connection for payment'), findsNothing);
+      expect(find.text('Accept & carry'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      e.dispose();
+    },
+  );
 
   testWidgets('Merchant has receive-first home and can add demo money', (
     tester,

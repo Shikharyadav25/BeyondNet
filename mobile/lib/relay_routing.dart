@@ -3,8 +3,8 @@ import 'protocol.dart';
 /// Routing hints are outside the signed financial authorization. They can help
 /// delivery but never authorize money or prove that a payment was processed.
 class RelayRouting {
-  static const maxHops = 4;
-  static const offlineFanout = 3;
+  static const maxHops = maxRelayHops;
+  static const offlineFanout = 2;
   static const custodyWindowSeconds = 90;
 
   static bool canForward(Json packet, String from, String to) {

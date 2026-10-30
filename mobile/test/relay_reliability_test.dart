@@ -40,7 +40,12 @@ void main() {
     });
     e.profile = {
       'device_id': id,
-      'account': {'id': '$id@beyondnet', 'balance': 100000, 'revision': 0},
+      'account': {
+        'id': '$id@beyondnet',
+        'balance': 100000,
+        'revision': 0,
+        'pin_configured': true,
+      },
       'certificate': certificate,
       'trust': {
         'sign_key': fixture['sign_public'],
@@ -85,13 +90,24 @@ void main() {
       final requestId = 'edge-${requestNumber++}';
       final request = decodeFrames(
         await a.signedRpc(command, requestId),
-        interrupted: interrupt && command['op'] == 'put',
+        interrupted: interrupt && command['op'] == 'offer',
       );
       var response = await b.handleRpc(request);
-      if (losePutAck && command['op'] == 'put') {
+      if (!approvedProtocol && !legacy && command['op'] == 'offer') {
+        final id = command['packet']['id'] as String;
+        if ((await b.store.packet(id)) == null) {
+          await b.store.decideInvitation(id, true);
+        }
+        response = await b.signedRpc({
+          'op': 'offer',
+          'id': id,
+          'state': 'accepted',
+        }, requestId);
+      }
+      if (losePutAck && command['op'] == 'offer') {
         throw TimeoutException('Stored by peer; response lost');
       }
-      if ((legacy || !approvedProtocol) && command['op'] == 'inventory') {
+      if (legacy && command['op'] == 'inventory') {
         final body = Map<String, dynamic>.from(response['body']);
         final old = Map<String, dynamic>.from(body['command']);
         if (legacy) {
@@ -120,6 +136,59 @@ void main() {
     );
     await a.store.putPacket(p);
     return p;
+  }
+
+  test(
+    'Offline custody needs one approval, survives restart, and has no connection prerequisite',
+    () async {
+      final a = await node('A'), b = await node('B');
+      final p = await payment(a);
+      await contact(a, b, approvedProtocol: true);
+      expect(b.connectionRequests, isEmpty);
+      expect(b.invitations, hasLength(1));
+      expect(await b.store.packet(p['id']), isNull);
+      await contact(a, b, approvedProtocol: true);
+      expect(b.invitations, hasLength(1));
+      await b.store.decideInvitation(p['id'], true);
+      await b.store.db.close();
+      await b.store.init(databasePath: '${directory.path}/B.sqlite3');
+      await contact(a, b, approvedProtocol: true);
+      expect(await a.store.recentCustodians(p['id']), {'B'});
+      expect(await b.store.packet(p['id']), isNotNull);
+    },
+  );
+
+  test(
+    'Decline chooses another carrier automatically and does not prompt again',
+    () async {
+      final a = await node('A'), b = await node('B'), c = await node('C');
+      final p = await payment(a);
+      await contact(a, b, approvedProtocol: true);
+      await b.store.decideInvitation(p['id'], false);
+      await contact(a, b, approvedProtocol: true);
+      await contact(a, c);
+      expect(await c.store.packet(p['id']), isNotNull);
+      expect(await b.store.packet(p['id']), isNull);
+      await contact(a, b, approvedProtocol: true);
+      expect(await b.store.invitations(), isEmpty);
+    },
+  );
+
+  Future<void> bankEvidence(BeyondNetEngine gateway, Json receipt) async {
+    final bank = await ed.newKeyPairFromSeed(
+      base64Decode(fixture['sign_seed']),
+    );
+    await gateway.receiveDeliveryProof(
+      await sign(bank, {
+        'v': 1,
+        'type': 'delivery_proof',
+        'mesh_id': 'test-mesh',
+        'packet_id': 'f' * 64,
+        'receipt_ids': [receipt['id']],
+        'recorded_at': nowSeconds,
+        'expires_at': nowSeconds + 86400,
+      }),
+    );
   }
 
   setUp(() async {
@@ -176,6 +245,7 @@ void main() {
         nowSeconds + 86400,
         path: ['A', 'B'],
       );
+      await bankEvidence(c, receipt);
       await c.accept(receipt);
       await contact(b, c);
       await contact(a, b);
@@ -186,14 +256,13 @@ void main() {
   );
 
   test(
-    'Four phones require each offline relay to approve and choose the next hop',
+    'Four phones automatically forward after each offline relay approves',
     () async {
       final a = await node('A');
       final b = await node('B');
       final c = await node('C');
       final d = await node('D');
       final packet = await payment(a);
-      await a.store.chooseRoute(packet['id'] as String, 'B');
 
       await contact(a, b, approvedProtocol: true);
       expect(await b.store.packet(packet['id']), isNull);
@@ -205,13 +274,11 @@ void main() {
       // Without a chosen next phone, C cannot pull an approved packet from B.
       await contact(c, b, approvedProtocol: true);
       expect(await c.store.packet(packet['id']), isNull);
-      await b.store.chooseRoute(packet['id'] as String, 'C');
       await contact(b, c, approvedProtocol: true);
       expect(c.invitations.single['source'], 'B');
       expect(await c.store.packet(packet['id']), isNull);
 
       await c.decideRelayInvitation(packet['id'] as String, true);
-      await c.store.chooseRoute(packet['id'] as String, 'D');
       await contact(c, d, approvedProtocol: true);
       expect(d.invitations.single['source'], 'C');
       await d.store.decideInvitation(packet['id'] as String, true);
@@ -309,12 +376,12 @@ void main() {
         'trail': ['X', 'Y', 'Z', 'W'],
       });
       await b.store.uploaded(p['id']);
-      await contact(a, b);
+      await b.store.putPacket(a.forwarded(p));
       final saved = (await b.store.packets()).single;
       expect(saved['hops'], 1);
       expect(saved['uploaded'], 1);
       await contact(b, c);
-      expect((await c.store.packet(p['id']))!['hops'], 2);
+      expect(await c.store.packet(p['id']), isNull);
       expect((await b.store.packets()).length, 1);
     },
   );
@@ -347,6 +414,7 @@ void main() {
         nowSeconds + 86400,
         path: ['A', 'unavailable-B'],
       );
+      await bankEvidence(c, receipt);
       await c.accept(receipt);
       await contact(c, d);
       await contact(d, a);
@@ -356,25 +424,30 @@ void main() {
   );
 
   test(
-    'Fanout is bounded for push and pull but permits gateway and recovery after lease ages',
+    'Custody fallback is passive first and lifetime bounded after restart',
     () async {
-      final a = await node('A');
+      final a = await node('A'),
+          b = await node('B'),
+          c = await node('C'),
+          d = await node('D');
       final p = await payment(a);
-      final peers = <BeyondNetEngine>[];
-      for (var i = 0; i < 5; i++) {
-        peers.add(await node('P$i', online: i == 4));
-      }
-      for (final b in peers.take(3)) {
-        await contact(a, b);
-      }
-      await contact(a, peers[3]);
-      await contact(peers[3], a);
-      expect(await peers[3].store.packet(p['id']), isNull);
-      await contact(a, peers[4]);
-      expect(await peers[4].store.packet(p['id']), isNotNull);
-      await a.store.db.update('relay_acks', {'at': nowSeconds - 91});
-      await contact(a, peers[3]);
-      expect(await peers[3].store.packet(p['id']), isNotNull);
+      await contact(a, b);
+      await contact(a, c);
+      expect(await c.store.packet(p['id']), isNull);
+      await a.store.db.update('delivery_attempts', {
+        'at': nowSeconds - 61,
+        'deadline': nowSeconds - 1,
+      });
+      await contact(a, c);
+      expect(await c.store.packet(p['id']), isNotNull);
+      await a.store.db.close();
+      await a.store.init(databasePath: '${directory.path}/A.sqlite3');
+      await a.store.db.update('delivery_attempts', {
+        'at': nowSeconds - 61,
+        'deadline': nowSeconds - 1,
+      });
+      await contact(a, d);
+      expect(await d.store.packet(p['id']), isNull);
     },
   );
 
@@ -397,23 +470,20 @@ void main() {
         b.handleRpc(
           await a.signedRpc({'op': 'put', 'packet': changed}, 'tamper'),
         ),
-        throwsFormatException,
+        throwsStateError,
       );
       expect(await b.store.packet(live['id']), isNull);
     },
   );
 
-  test(
-    'Old v1 peer inventories still exchange the unchanged encrypted protocol',
-    () async {
-      final a = await node('A'), b = await node('B');
-      final p = await payment(a);
-      await contact(a, b, legacy: true);
-      expect((await b.store.packet(p['id']))!['box'], p['box']);
-      final old = Map<String, dynamic>.from(p)..remove('trail');
-      await checkPacket(old);
-    },
-  );
+  test('Legacy peers cannot bypass required payment consent', () async {
+    final a = await node('A'), b = await node('B');
+    final p = await payment(a);
+    await contact(a, b, legacy: true);
+    expect(await b.store.packet(p['id']), isNull);
+    final old = Map<String, dynamic>.from(p)..remove('trail');
+    await checkPacket(old);
+  });
 
   test(
     'Version 1 database upgrades in place preserving config and history',
@@ -465,6 +535,83 @@ void main() {
       }
     },
   );
+
+  test(
+    'Eight Bluetooth handoffs work; ninth blocked while gateway can still hold and submit',
+    () async {
+      final chain = <BeyondNetEngine>[];
+      for (var i = 0; i < 10; i++) {
+        chain.add(await node('hop-$i'));
+      }
+      final p = await payment(chain.first);
+      for (var i = 0; i < 8; i++) {
+        await contact(chain[i], chain[i + 1]);
+      }
+      expect((await chain[8].store.packet(p['id']))!['hops'], 8);
+      await contact(chain[8], chain[9]);
+      expect(await chain[9].store.packet(p['id']), isNull);
+      expect((await chain[8].store.packet(p['id']))!['box'], p['box']);
+    },
+  );
+
+  test('A known bank-capable candidate outranks an offline carrier', () async {
+    final a = await node('A'),
+        b = await node('B'),
+        c = await node('C', online: true);
+    final p = await payment(a);
+    await contact(a, c); // bank-capable peer authenticated and recorded
+    expect(await c.store.packet(p['id']), isNotNull);
+    await contact(a, b);
+    expect(await b.store.packet(p['id']), isNull);
+  });
+
+  test('Stale offer action cannot approve a newer generation', () async {
+    final a = await node('A'), b = await node('B');
+    final p = await payment(a);
+    await b.store.invite(
+      a.forwarded(p),
+      'A',
+      'A',
+      deadline: nowSeconds + 30,
+      token: 'old',
+    );
+    await b.store.invite(
+      a.forwarded(p),
+      'A',
+      'A',
+      deadline: nowSeconds + 30,
+      token: 'new',
+    );
+    await expectLater(
+      b.store.decideInvitation(p['id'], true, token: 'old'),
+      throwsStateError,
+    );
+    expect(await b.store.packet(p['id']), isNull);
+    await b.store.decideInvitation(p['id'], true, token: 'new');
+    expect(await b.store.packet(p['id']), isNotNull);
+  });
+
+  test('Forged bank proof cannot suppress payment delivery', () async {
+    final a = await node('A');
+    final p = await payment(a);
+    final attacker = await ed.newKeyPair();
+    await expectLater(
+      a.receiveDeliveryProof(
+        await sign(attacker, {
+          'v': 1,
+          'type': 'delivery_proof',
+          'mesh_id': 'test-mesh',
+          'packet_id': p['id'],
+          'receipt_ids': ['a' * 64],
+          'recorded_at': nowSeconds,
+          'expires_at': nowSeconds + 600,
+        }),
+      ),
+      throwsFormatException,
+    );
+    expect((await a.store.packets()).single['uploaded'], 0);
+    expect(await a.store.proofs(), isEmpty);
+  });
 
   test('Receipt backlog cannot consume the entire payment transfer budget', () {
     final ordered = [

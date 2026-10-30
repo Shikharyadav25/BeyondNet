@@ -8,6 +8,10 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @Profile("campus")
 public class CampusOperatorController {
+  @org.springframework.beans.factory.annotation.Value("${CAMPUS_PUBLIC_URL}")
+  private String publicUrl;
+  @org.springframework.beans.factory.annotation.Value("${CAMPUS_CODE:PSIT-KANPUR}")
+  private String campusCode;
   private final CampusService campus;
   private final BankDatabase db;
   public CampusOperatorController(CampusService campus, BankDatabase db) {this.campus=campus;this.db=db;}
@@ -36,17 +40,16 @@ public class CampusOperatorController {
       <!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
       <title>PSIT Kanpur Campus</title><style>body{font:18px system-ui;max-width:760px;margin:40px auto;padding:20px;background:#f2faf8;color:#14352f}input,button{font:inherit;padding:12px;margin:8px 0;width:95%}img{max-width:100%}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style>
       <h1>PSIT Kanpur Campus</h1><p>BeyondNet demonstration server. Use generated Campus credentials; this is not an official PSIT ERP integration.</p>
-      <p>Start the campus tunnel to port 8090. Copy its HTTPS origin below, then generate the public enrollment QR.</p>
+      <p>Enter your operator key to generate the campus enrollment QR. Your campus and connection are already configured.</p>
       <label>Campus operator key<input id="key" type="password" autocomplete="off"></label>
-      <label>Campus code<input id="code" value="PSIT-KANPUR"></label>
-      <label>Campus HTTPS URL<input id="url" placeholder="https://your-campus.ngrok-free.app"></label>
       <button id="generate">Generate campus setup QR</button><p id="status" role="status"></p><img id="qr" alt="Campus enrollment QR" hidden><pre id="details"></pre>
       <script>
+      const setupConfig=__CAMPUS_SETUP_CONFIG__;
       let previous;document.getElementById('generate').onclick=async()=>{
         const status=document.getElementById('status');status.textContent='Generating…';
         document.getElementById('qr').hidden=true;document.getElementById('details').textContent='';
-        try{const code=encodeURIComponent(document.getElementById('code').value.trim().toUpperCase());
-          const query='?campus_url='+encodeURIComponent(document.getElementById('url').value.trim());
+        try{const code=encodeURIComponent(setupConfig.code);
+          const query='?campus_url='+encodeURIComponent(setupConfig.url);
           const headers={Authorization:'Bearer '+document.getElementById('key').value.trim()};
           const base='/api/admin/campus/'+code+'/setup';
           const response=await fetch(base+query,{headers});const data=await response.json();
@@ -58,7 +61,7 @@ public class CampusOperatorController {
           status.textContent='Scan in Campus → Scan college setup QR. Share only with trusted demo participants.';
         }catch(e){status.textContent=e.message;}};
       </script></html>
-      """;
+      """.replace("__CAMPUS_SETUP_CONFIG__", json(map("code", campusCode, "url", publicUrl)).replace("<", "\\u003c"));
   }
   @ExceptionHandler(BankException.class) public ResponseEntity<?> error(BankException e) {
     return ResponseEntity.status(e.status).body(map("detail",e.getMessage()));

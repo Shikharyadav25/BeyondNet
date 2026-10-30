@@ -119,7 +119,7 @@ public class BankService {
             "payment_version",
             2,
             "payment_ttl_seconds",
-            600);
+            600, "relay_protocol", 4, "max_bluetooth_hops", 8);
     h.putAll(trust);
     return h;
   }
@@ -247,8 +247,29 @@ public class BankService {
         });
   }
 
+  public Map<String, Object> paymentIds(String name, String id) {
+    if (name.length() > 60 || id.length() > 100) throw new BankException(400, "Name or payment ID is too long");
+    String candidate = id.strip();
+    boolean valid = candidate.matches("[a-z0-9][a-z0-9._-]{2,31}@beyondnet");
+    String base = name.strip().toLowerCase(Locale.ROOT).split("\\s+")[0].replaceAll("[^a-z0-9]", "");
+    if (base.length() < 3) base = base + "user";
+    base = base.substring(0, Math.min(base.length(), 24));
+    final String prefix = base;
+    return db.read(c -> {
+      var choices = new ArrayList<String>();
+      var random = new java.security.SecureRandom();
+      if (!name.isBlank()) for (int attempt = 0; choices.size() < 4 && attempt < 200; attempt++) {
+        int suffix = attempt < 80 ? 10 + random.nextInt(90) : 100 + random.nextInt(999900);
+        String suggestion = prefix + suffix + "@beyondnet";
+        if (!choices.contains(suggestion) && one(c, "SELECT id FROM accounts WHERE id=?", suggestion) == null) choices.add(suggestion);
+      }
+      return map("suggestions", choices, "id", candidate, "valid", valid,
+          "available", valid && one(c, "SELECT id FROM accounts WHERE id=?", candidate) == null);
+    });
+  }
+
   public Map<String, Object> signup(Map<String, Object> body) {
-    String aid = text(body, "account", 0, 100).strip().toLowerCase(Locale.ROOT),
+    String aid = text(body, "account", 0, 100).strip(),
         password = text(body, "password", 0, 128),
         name = text(body, "name", 1, 60).strip(),
         role = text(body, "role", 1, 20);
@@ -564,7 +585,7 @@ public class BankService {
                 "duplicate",
                 true,
                 "receipts",
-                savedReceipts);
+                savedReceipts, "delivery_proof", deliveryProof(packet, savedReceipts));
           }
           for (String key : List.of("sender_mailbox", "recipient_mailbox"))
             reserveMailbox(c, (String) body.get(key), body);
@@ -711,11 +732,18 @@ public class BankService {
                   reason,
                   "bank_ref",
                   ref));
-          return map("duplicate", false, "receipts", receipts);
+          return map("duplicate", false, "receipts", receipts, "delivery_proof", deliveryProof(packet, receipts));
         });
   }
 
   /** Refresh delivery of a durable outcome, never the payment authorization or ledger. */
+  private Map<String, Object> deliveryProof(Map<String, Object> request, List<?> receipts) {
+    return sign(signing, map("v", 1, "type", "delivery_proof", "mesh_id", trust.get("mesh_id"),
+        "packet_id", request.get("id"), "receipt_ids", receipts.stream()
+            .map(value -> object(value).get("id")).toList(),
+        "recorded_at", now(), "expires_at", now() + 7 * 86400));
+  }
+
   private List<Map<String, Object>> refreshDecisionReceipts(
       Connection c, Map<String, Object> decision, Map<String, Object> body,
       Map<String, Object> request) throws Exception {

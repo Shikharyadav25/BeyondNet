@@ -247,11 +247,11 @@ public final class WireCrypto {
                 p.get("expires_at")))
         .equals(p.get("id"))) throw new IllegalArgumentException("Packet integrity mismatch");
     long hops = integer(p.get("hops"));
-    if (hops < 0 || hops > 4) throw new IllegalArgumentException("Hop budget exceeded");
+    if (hops < 0 || hops > 8) throw new IllegalArgumentException("Hop budget exceeded");
     for (String field : List.of("path", "trail")) {
       Object value = p.get(field);
       if (field.equals("trail") && value == null) continue;
-      int maximum = field.equals("path") ? 8 : 4;
+      int maximum = field.equals("path") ? 9 : 8;
       if (!(value instanceof List<?> route) || route.size() > maximum
           || (field.equals("trail") && route.size() > hops)
           || route.stream().anyMatch(x -> !(x instanceof String s) || s.isEmpty() || s.length() > 80)

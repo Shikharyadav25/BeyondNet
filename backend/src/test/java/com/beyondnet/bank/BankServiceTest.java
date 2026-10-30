@@ -39,6 +39,21 @@ class BankServiceTest {
     bank.topup(payer, map("amount", 100000, "request_id", UUID.randomUUID().toString()));
   }
 
+  @Test
+  void deliveryEvidenceIsBankSignedAndPreservesPrivateReceiptContents() {
+    Map<String, Object> request = wrap(body(100));
+    Map<String, Object> result = bank.ingest(request);
+    Map<String, Object> proof = BankService.object(result.get("delivery_proof"));
+    Map<String, Object> body = verify((String) bank.health().get("sign_key"), proof);
+    assertEquals("delivery_proof", body.get("type"));
+    assertEquals(request.get("id"), body.get("packet_id"));
+    assertFalse(body.containsKey("amount"));
+    assertFalse(body.containsKey("sender"));
+    assertFalse(body.containsKey("status"));
+    assertFalse(((List<?>) body.get("receipt_ids")).isEmpty());
+    assertNotNull(bank.ingest(request).get("delivery_proof"));
+  }
+
   @AfterEach
   void close() {
     if (db != null) {
@@ -69,6 +84,26 @@ class BankServiceTest {
             boxPublic(box),
             "proof",
             sign(sign, identity).get("signature")));
+  }
+
+  @Test
+  void paymentIdSuggestionsAreAvailableAndSignupRejectsUppercaseAndDuplicates() {
+    var result = bank.paymentIds("Shaurya Yadav", payer);
+    assertEquals(false, result.get("available"));
+    var suggestions = (List<?>)result.get("suggestions");
+    assertEquals(4, suggestions.size());
+    assertEquals(4, new HashSet<>(suggestions).size());
+    for (var suggestion : suggestions) {
+      assertTrue(suggestion.toString().matches("shaurya[0-9]+@beyondnet"));
+      assertEquals(true, bank.paymentIds("", suggestion.toString()).get("available"));
+    }
+    String chosen = suggestions.getFirst().toString();
+    bank.signup(map("account", chosen, "password", password, "name", "Shaurya", "role", "customer"));
+    assertEquals(false, bank.paymentIds("", chosen).get("available"));
+    assertEquals(409, assertThrows(BankException.class, () -> bank.signup(map("account", chosen, "password", password, "name", "Another", "role", "customer"))).status);
+    assertEquals(false, bank.paymentIds("", "SHAURYA@BEYONDNET").get("valid"));
+    assertEquals(400, assertThrows(BankException.class, () -> bank.signup(map("account", "SHAURYA@BEYONDNET", "password", password, "name", "Shaurya", "role", "customer"))).status);
+    assertEquals(false, bank.paymentIds("", "a@beyondnet").get("valid"));
   }
 
   Map<String, Object> body(long amount) {

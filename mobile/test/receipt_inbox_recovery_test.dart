@@ -194,7 +194,7 @@ void main() {
             where: 'id=?',
             whereArgs: [payment['id']],
           )).single['uploaded'],
-          1,
+          0,
         );
         expect((await e.store.payments()).single['state'], 'queued');
         // Transport success without a bank-signed outcome must never mean Paid.

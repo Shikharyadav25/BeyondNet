@@ -257,14 +257,14 @@ void main() {
         'account': {'id': 'local@beyondnet', 'balance': 0, 'revision': 0},
       };
       final requested = await makePacket(
-        'payment',
+        'receipt',
         {'audit': 'requested'},
         randomCapability(),
         nowSeconds + 600,
       );
       final substitute = {
         ...await makePacket(
-          'payment',
+          'receipt',
           {'audit': 'substitute'},
           randomCapability(),
           nowSeconds + 600,
@@ -286,7 +286,7 @@ void main() {
                   'device_id': 'peer',
                   'routing': 2,
                   'routes': [
-                    {'id': requested['id'], 'hops': 0, 'kind': 'payment'},
+                    {'id': requested['id'], 'hops': 0, 'kind': 'receipt'},
                   ],
                 };
               case 'get':
@@ -393,6 +393,15 @@ void main() {
         mailbox,
         nowSeconds + 7 * 86400,
       );
+      final proof = await sign(bank, {
+        'v': 1,
+        'type': 'delivery_proof',
+        'mesh_id': 'audit-mesh',
+        'packet_id': old['id'],
+        'receipt_ids': [refreshed['id']],
+        'recorded_at': nowSeconds,
+        'expires_at': nowSeconds + 7 * 86400,
+      });
       var duplicateRecovered = false;
       final e = BeyondNetEngine(
         client: MockClient((req) async {
@@ -407,6 +416,7 @@ void main() {
             return http.Response(
               jsonEncode({
                 'duplicate': true,
+                'delivery_proof': proof,
                 'receipts': [refreshed],
               }),
               200,
@@ -422,6 +432,7 @@ void main() {
         'bank_url': 'https://audit.invalid',
         'account': {'id': 'local@beyondnet', 'balance': 9000, 'revision': 1},
         'trust': {
+          'mesh_id': 'audit-mesh',
           'fingerprint': 'audit',
           'sign_key': base64Encode((await bank.extractPublicKey()).bytes),
         },

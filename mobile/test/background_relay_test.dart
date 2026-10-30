@@ -62,7 +62,7 @@ void main() {
     radio = TestRadio();
     messenger.setMockMethodCallHandler(BackgroundRelay.channel, (call) async {
       calls.add(call.method);
-      if (call.method == 'ready') {
+      if (call.method == 'ready' || call.method == 'status') {
         return {'enabled': enabled, 'running': running, 'blocked': blocked};
       }
       if (call.method == 'start') {
@@ -109,6 +109,32 @@ void main() {
     messenger.setMockMethodCallHandler(BeyondNetEngine.platform, null);
   });
 
+  test(
+    'start waits for Android service before opening the Bluetooth radio',
+    () async {
+      await engine.init(databasePath: '${directory.path}/phone.db');
+      var polls = 0;
+      messenger.setMockMethodCallHandler(BackgroundRelay.channel, (call) async {
+        if (call.method == 'start') {
+          enabled = true;
+          return true;
+        }
+        if (call.method == 'status') {
+          expect(radio.starts, 0);
+          polls++;
+          running = polls >= 3;
+        }
+        if (call.method == 'status' || call.method == 'ready') {
+          return {'enabled': enabled, 'running': running, 'blocked': null};
+        }
+        return true;
+      });
+      await engine.startRelay();
+      expect(polls, 3);
+      expect(radio.starts, 1);
+      expect(engine.relay, isTrue);
+    },
+  );
   test('Fresh install never starts relay until explicit user opt-in', () async {
     await engine.init(databasePath: '${directory.path}/phone.db');
     expect(radio.running, isFalse);

@@ -1,8 +1,8 @@
-> **Campus development branch:** the app now opens a Payments/Campus chooser. See [Campus architecture, provisioning and validation](docs/CAMPUS.md) for the pilot setup and current limits. Existing installer APKs predate this branch.
+> **BeyondNet 1.6.0:** Payments and Campus are available from the app chooser. Payments authorize first and automatically seek online or offline carriers. See [the payment-first relay guide](docs/RELAY_APPROVAL_FLOW.md).
 
 # BeyondNet
 
-Campus branch: [PSIT Kanpur server, independent tunnel, credentials and QR setup](docs/PSIT_CAMPUS.md). Campus update: 1.5.1 (build 21); see the guide for APK build status and physical acceptance requirements.
+Campus: [architecture and provisioning](docs/CAMPUS.md). The local launcher shares one ngrok origin between the Bank and Campus servers.
 
 **Initiate payments offline. Carry encrypted requests through nearby phones. Settle when a gateway reaches the bank.**
 
@@ -10,13 +10,15 @@ BeyondNet is an Android payment proof of concept for environments with unreliabl
 
 | Mobile release | Bank release | Supported platform | Payment environment |
 | --- | --- | --- | --- |
-| **1.4.5 · build 19** | **1.3.3** | **Android 10+** | **Simulated INR** |
+| **1.6.0 · build 28** | **1.3.3** | **Android 10+** | **Simulated INR** |
 
 > BeyondNet uses demo funds and has no real UPI or banking integration. Payment initiation can happen offline; final settlement requires an internet-connected gateway to reach the bank.
 
-**[Download Android 1.4.5](https://raw.githubusercontent.com/Shikharyadav25/BeyondNet/v1.4.5/installers/BeyondNet-Android-1.4.5.apk)** · [Release notes](docs/RELEASE_1.4.5.md) · [APK checksums](installers/SHA256SUMS.txt) · [Versioned source](https://github.com/Shikharyadav25/BeyondNet/tree/v1.4.5)
+**[Download Android 1.6.0](installers/BeyondNet-Android-1.6.0.apk)** · [Relay setup and testing](docs/RELAY_APPROVAL_FLOW.md) · [APK checksums](installers/SHA256SUMS.txt) · [Bank setup QR](installers/BeyondNet-bank-setup.png) · [Campus setup QR](installers/BeyondNet-campus-setup.png)
 
-**131 app tests passed on 28 October 2026.** PIN setup now updates when the bank reconnects and offers a connection retry on the form. The unchanged bank retains its 46 Java/6 Python test baseline and the earlier payment/receipt fixes. Physical Bluetooth acceptance for this APK is still outstanding; automated radio simulations do not establish real-device delivery.
+**159 app tests and 55 Java backend tests passed on 30 October 2026.** Checks cover direct online payments, a five-phone topology with real-bank settlement and offline receipt return, and an eight-handoff routing boundary. Physical Bluetooth range, locked-screen delivery and battery performance still require phone testing. Use version 1.6.0 on all participating phones. This APK retains the local signing identity used for 1.5.2–1.5.7; upgrading an older installation signed with a different key needs its original signer.
+
+Current signup includes lowercase payment IDs, live availability checks, name-based suggestions and an optional demonstration identity-input step after filling the account form. Document inputs are temporary and do not establish verified identity.
 
 [Get started](#getting-started) · [Verified results](#verified-release-results) · [Architecture](#architecture) · [Features](#features) · [Tech stack](#tech-stack) · [Security](#security-and-payment-safety) · [Documentation](#documentation)
 
@@ -48,7 +50,7 @@ flowchart LR
     C <-->|"Loopback + operator authentication"| B
 ```
 
-- **Discovered topology:** two phones work without an intermediate relay; additional offline phones can form a chain. Honest peers enforce a four-hop forwarding limit; routing hints are not cryptographic proof of a malicious relay's actual hop count.
+- **Discovered topology:** two phones work without an intermediate relay; additional offline phones can form a chain. Honest peers enforce an eight-handoff forwarding limit; routing hints are not cryptographic proof of a malicious relay's actual hop count.
 - **Ciphertext forwarding:** payment instructions and the demo PIN are encrypted for the bank. Relaying does not authorize a debit.
 - **Internet-only bank:** the bank never joins Bluetooth and need not be near the phones. The bank runs on a laptop or server with local or hosted PostgreSQL.
 - **Receipt recovery:** the bank saves a signed outcome for the sender's registered device. When that phone regains internet, it receives the outcome through WebSocket or fetches it through HTTPS, without needing the relay chain to remain intact.

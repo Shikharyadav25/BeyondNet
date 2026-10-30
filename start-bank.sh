@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")"
-export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
+export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/local/bin:$PATH"
 export KARO_DATA_DIR="${KARO_DATA_DIR:-$PWD/data}"
 export BEYONDNET_DB_CONFIG="${BEYONDNET_DB_CONFIG:-$PWD/data/postgres.properties}"
 if command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:"${PORT:-8080}" -sTCP:LISTEN >/dev/null 2>&1; then

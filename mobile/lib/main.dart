@@ -9,6 +9,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'engine.dart';
+import 'demo_identity.dart';
 import 'campus/campus_engine.dart';
 import 'campus/campus_page.dart';
 import 'payment_pin.dart';
@@ -24,8 +25,9 @@ const ink = Color(0xff143b3b),
     muted = Color(0xff788b86);
 String rupees(dynamic paise) => '₹${((paise as num) / 100).toStringAsFixed(2)}';
 String stamp(dynamic seconds) {
-  final d = DateTime.fromMillisecondsSinceEpoch((seconds as int) * 1000)
-      .toLocal();
+  final d = DateTime.fromMillisecondsSinceEpoch(
+    (seconds as int) * 1000,
+  ).toLocal();
   return '${d.day}/${d.month} · ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
 }
 
@@ -58,6 +60,31 @@ class _BeyondNetAppState extends State<BeyondNetApp>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    engine.addListener(openNotification);
+  }
+
+  final navigator = GlobalKey<NavigatorState>();
+  bool openingNotification = false;
+  void openNotification() {
+    if (engine.notificationTab == null ||
+        engine.profile == null ||
+        openingNotification) {
+      return;
+    }
+    openingNotification = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      openingNotification = false;
+      if (!mounted || engine.notificationTab == null) return;
+      final tab = engine.notificationTab!;
+      engine.notificationTab = null;
+      navigator.currentState?.pushAndRemoveUntil(
+        MaterialPageRoute<void>(
+          builder: (_) => Shell(engine: engine, initialTab: tab),
+        ),
+        (route) => route.isFirst,
+      );
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   @override
@@ -69,6 +96,7 @@ class _BeyondNetAppState extends State<BeyondNetApp>
 
   @override
   void dispose() {
+    engine.removeListener(openNotification);
     WidgetsBinding.instance.removeObserver(this);
     // Native service owns the engine across Activity changes.
     super.dispose();
@@ -78,6 +106,7 @@ class _BeyondNetAppState extends State<BeyondNetApp>
   Future<void> get initialized => widget.initialized;
   @override
   Widget build(BuildContext context) => MaterialApp(
+    navigatorKey: navigator,
     title: 'BeyondNet',
     debugShowCheckedModeBanner: false,
     theme: ThemeData(
@@ -306,6 +335,14 @@ class LoginPage extends StatefulWidget {
   State<LoginPage> createState() => _LoginState();
 }
 
+class LowercasePaymentIdFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) => newValue.copyWith(text: newValue.text.toLowerCase());
+}
+
 class _LoginState extends State<LoginPage> {
   final url = TextEditingController(),
       account = TextEditingController(),
@@ -313,9 +350,70 @@ class _LoginState extends State<LoginPage> {
       fingerprint = TextEditingController(),
       name = TextEditingController();
   bool busy = false, visible = false, signup = true;
+  bool identityStepComplete = false, identityStepPending = false;
   String role = 'customer';
   bool importingBank = false;
   String? bankSetupStatus;
+  Timer? idCheckTimer;
+  int idCheckRevision = 0;
+  bool checkingId = false;
+  bool? idAvailable;
+  String? idCheckMessage;
+  List<String> suggestedIds = [];
+  void idFormChanged() {
+    idCheckTimer?.cancel();
+    final revision = ++idCheckRevision;
+    if (!mounted) return;
+    setState(() {
+      idAvailable = null;
+      checkingId = false;
+      idCheckMessage = null;
+      suggestedIds = [];
+    });
+    if (!signup || busy) return;
+    if (url.text.trim().isEmpty || fingerprint.text.trim().length != 64) {
+      setState(() => idCheckMessage = 'Set up your bank to see available IDs.');
+      return;
+    }
+    if (name.text.trim().isEmpty && account.text.trim().isEmpty) return;
+    idCheckTimer = Timer(const Duration(milliseconds: 600), () async {
+      if (!mounted || !signup || revision != idCheckRevision) return;
+      setState(() => checkingId = true);
+      try {
+        final result = await widget.engine.paymentIdChoices(
+          url.text,
+          fingerprint.text,
+          name.text,
+          account.text,
+        );
+        if (!mounted || !signup || revision != idCheckRevision) return;
+        setState(() {
+          suggestedIds = (result['suggestions'] as List).cast<String>();
+          final entered = account.text.trim();
+          idAvailable = entered.isEmpty ? null : result['available'] == true;
+          idCheckMessage = entered.isEmpty
+              ? null
+              : result['valid'] != true
+              ? 'Use 3–32 lowercase letters, digits, dots, underscores or hyphens, followed by @beyondnet.'
+              : idAvailable!
+              ? 'Available — you can use this ID.'
+              : 'Already taken. Choose another ID.';
+        });
+      } catch (_) {
+        if (mounted && signup && revision == idCheckRevision) {
+          setState(
+            () => idCheckMessage =
+                'Could not check IDs. Check your bank connection and try again.',
+          );
+        }
+      } finally {
+        if (mounted && revision == idCheckRevision) {
+          setState(() => checkingId = false);
+        }
+      }
+    });
+  }
+
   @override
   void initState() {
     super.initState();
@@ -324,6 +422,9 @@ class _LoginState extends State<LoginPage> {
       url.text = widget.engine.bankUrl;
       account.text = widget.engine.accountId;
       fingerprint.text = widget.engine.trust['fingerprint'];
+    }
+    for (final c in [name, account, url, fingerprint]) {
+      c.addListener(idFormChanged);
     }
     if (Platform.isAndroid) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -339,6 +440,8 @@ class _LoginState extends State<LoginPage> {
 
   @override
   void dispose() {
+    idCheckTimer?.cancel();
+    ++idCheckRevision;
     for (final c in [url, account, password, fingerprint, name]) {
       c.dispose();
     }
@@ -413,7 +516,53 @@ class _LoginState extends State<LoginPage> {
     }
   }
 
+  Future<void> finishIdentity() async {
+    setState(() {
+      identityStepComplete = true;
+      identityStepPending = false;
+    });
+    await submit();
+  }
+
   Future<void> submit() async {
+    if (signup && !identityStepComplete) {
+      if (name.text.trim().isEmpty ||
+          password.text.length < 8 ||
+          !RegExp(
+            r'^[a-z0-9][a-z0-9._-]{2,31}@beyondnet$',
+          ).hasMatch(account.text.trim()) ||
+          !url.text.trim().startsWith('https://') ||
+          fingerprint.text.trim().length != 64) {
+        await alert(
+          context,
+          'Complete your name, payment ID, password and bank setup before continuing.',
+        );
+        return;
+      }
+      if (idAvailable == false &&
+          idCheckMessage?.startsWith('Already taken') == true) {
+        await alert(
+          context,
+          'This payment ID is already taken. Choose another ID.',
+        );
+        return;
+      }
+      idCheckTimer?.cancel();
+      ++idCheckRevision;
+      setState(() => identityStepPending = true);
+      return;
+    }
+    if (signup &&
+        idAvailable == false &&
+        idCheckMessage?.startsWith('Already taken') == true) {
+      await alert(
+        context,
+        'This payment ID is already taken. Choose another ID.',
+      );
+      return;
+    }
+    idCheckTimer?.cancel();
+    ++idCheckRevision;
     setState(() => busy = true);
     try {
       await widget.engine.enroll(
@@ -441,214 +590,345 @@ class _LoginState extends State<LoginPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: widget.renewal
-        ? AppBar(title: const Text('Renew online access'))
-        : null,
-    body: SafeArea(
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 520),
-          child: ListView(
-            padding: const EdgeInsets.all(26),
-            children: [
-              const SizedBox(height: 22),
-              const Brand(),
-              const SizedBox(height: 45),
-              const Eyebrow('YOUR SIGNAL IS ENOUGH'),
-              const SizedBox(height: 12),
-              Text(
-                widget.renewal
-                    ? 'Reconnect securely.'
-                    : signup
-                    ? 'Your money.\nMore ways to pay.'
-                    : 'Welcome back.',
-                style: Theme.of(context).textTheme.headlineLarge,
-              ),
-              const SizedBox(height: 15),
-              const Hint(
-                'Set up online once. Then let nearby participating phones carry your encrypted payment to the demo bank.',
-              ),
-              const SizedBox(height: 22),
-              if (!widget.renewal) ...[
-                SegmentedButton<bool>(
-                  segments: const [
-                    ButtonSegment(value: true, label: Text('Create account')),
-                    ButtonSegment(value: false, label: Text('Sign in')),
-                  ],
-                  selected: {signup},
-                  onSelectionChanged: busy
-                      ? null
-                      : (v) => setState(() => signup = v.first),
-                ),
-                const SizedBox(height: 18),
-              ],
-              if (signup) ...[
-                const Text(
-                  'How will you use BeyondNet?',
-                  style: TextStyle(fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 10),
-                SegmentedButton<String>(
-                  segments: const [
-                    ButtonSegment(
-                      value: 'customer',
-                      icon: Icon(Icons.person_outline),
-                      label: Text('Personal'),
+  Widget build(BuildContext context) =>
+      !widget.renewal && signup && identityStepPending
+      ? DemoIdentityStep(
+          onContinue: () => unawaited(finishIdentity()),
+          onSkip: () => unawaited(finishIdentity()),
+          onSignIn: () => setState(() {
+            identityStepPending = false;
+            signup = false;
+          }),
+        )
+      : Scaffold(
+          appBar: widget.renewal
+              ? AppBar(title: const Text('Renew online access'))
+              : null,
+          body: SafeArea(
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 520),
+                child: ListView(
+                  padding: const EdgeInsets.all(26),
+                  children: [
+                    const SizedBox(height: 22),
+                    const Brand(),
+                    const SizedBox(height: 45),
+                    const Eyebrow('YOUR SIGNAL IS ENOUGH'),
+                    const SizedBox(height: 12),
+                    Text(
+                      widget.renewal
+                          ? 'Reconnect securely.'
+                          : signup
+                          ? 'Your money.\nMore ways to pay.'
+                          : 'Welcome back.',
+                      style: Theme.of(context).textTheme.headlineLarge,
                     ),
-                    ButtonSegment(
-                      value: 'merchant',
-                      icon: Icon(Icons.storefront_outlined),
-                      label: Text('Merchant'),
+                    const SizedBox(height: 15),
+                    const Hint(
+                      'Set up online once. Then let nearby participating phones carry your encrypted payment to the demo bank.',
                     ),
-                  ],
-                  selected: {role},
-                  onSelectionChanged: busy
-                      ? null
-                      : (v) => setState(() => role = v.first),
-                ),
-                const SizedBox(height: 8),
-                Hint(
-                  role == 'merchant'
-                      ? 'Receive payments with your store QR. You can also help nearby phones relay.'
-                      : 'Pay by ID or QR. You can also help nearby phones relay.',
-                ),
-                const SizedBox(height: 14),
-                TextField(
-                  controller: name,
-                  decoration: InputDecoration(
-                    labelText: role == 'merchant'
-                        ? 'Business name'
-                        : 'Your name',
-                  ),
-                ),
-                const SizedBox(height: 14),
-              ],
-              const Text(
-                'Set up your bank',
-                style: TextStyle(fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 10,
-                runSpacing: 8,
-                children: [
-                  OutlinedButton.icon(
-                    onPressed: busy || importingBank
-                        ? null
-                        : () => importBankCode(false),
-                    icon: const Icon(Icons.qr_code_scanner),
-                    label: const Text('Scan bank QR'),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: busy || importingBank
-                        ? null
-                        : () => importBankCode(true),
-                    icon: const Icon(Icons.photo_library_outlined),
-                    label: const Text('Choose QR image'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Hint(
-                bankSetupStatus ?? 'Scan or choose the bank setup QR to fill both fields, or enter them manually.',
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                controller: url,
-                keyboardType: TextInputType.url,
-                autocorrect: false,
-                decoration: const InputDecoration(
-                  labelText: 'Bank HTTPS URL',
-                  hintText: 'https://your-bank.example',
-                  prefixIcon: Icon(Icons.account_balance_outlined),
-                ),
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                controller: account,
-                autocorrect: false,
-                keyboardType: TextInputType.emailAddress,
-                decoration: const InputDecoration(
-                  labelText: 'Payment ID',
-                  hintText: 'yourname@beyondnet',
-                  prefixIcon: Icon(Icons.alternate_email),
-                ),
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                controller: password,
-                obscureText: !visible,
-                decoration: InputDecoration(
-                  labelText: 'Password (at least 8 characters)',
-                  prefixIcon: const Icon(Icons.lock_outline),
-                  suffixIcon: IconButton(
-                    onPressed: () => setState(() => visible = !visible),
-                    icon: Icon(
-                      visible
-                          ? Icons.visibility_off_outlined
-                          : Icons.visibility_outlined,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                controller: fingerprint,
-                autocorrect: false,
-                maxLines: 2,
-                decoration: const InputDecoration(
-                  labelText: 'Bank trust fingerprint',
-                  hintText: 'Paste the 64-character fingerprint from Device setup on the laptop',
-                ),
-              ),
-              const SizedBox(height: 10),
-              const Hint(
-                'Compare this fingerprint with your laptop before enrolling. It pins the bank’s signing and encryption keys.',
-              ),
-              const SizedBox(height: 20),
-              FilledButton(
-                onPressed: busy || importingBank ? null : submit,
-                child: busy
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : Text(
-                        widget.renewal
-                            ? 'Renew access'
-                            : signup
-                            ? 'Create account & continue'
-                            : 'Sign in securely',
+                    const SizedBox(height: 22),
+                    if (!widget.renewal) ...[
+                      SegmentedButton<bool>(
+                        segments: const [
+                          ButtonSegment(
+                            value: true,
+                            label: Text('Create account'),
+                          ),
+                          ButtonSegment(value: false, label: Text('Sign in')),
+                        ],
+                        selected: {signup},
+                        onSelectionChanged: busy
+                            ? null
+                            : (v) {
+                                setState(() => signup = v.first);
+                                idFormChanged();
+                              },
                       ),
+                      const SizedBox(height: 18),
+                    ],
+                    if (signup) ...[
+                      const Text(
+                        'How will you use BeyondNet?',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 10),
+                      SegmentedButton<String>(
+                        segments: const [
+                          ButtonSegment(
+                            value: 'customer',
+                            icon: Icon(Icons.person_outline),
+                            label: Text('Personal'),
+                          ),
+                          ButtonSegment(
+                            value: 'merchant',
+                            icon: Icon(Icons.storefront_outlined),
+                            label: Text('Merchant'),
+                          ),
+                        ],
+                        selected: {role},
+                        onSelectionChanged: busy
+                            ? null
+                            : (v) => setState(() => role = v.first),
+                      ),
+                      const SizedBox(height: 8),
+                      Hint(
+                        role == 'merchant'
+                            ? 'Receive payments with your store QR. You can also help nearby phones relay.'
+                            : 'Pay by ID or QR. You can also help nearby phones relay.',
+                      ),
+                      const SizedBox(height: 14),
+                      TextField(
+                        controller: name,
+                        decoration: InputDecoration(
+                          labelText: role == 'merchant'
+                              ? 'Business name'
+                              : 'Your name',
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                    ],
+                    const Text(
+                      'Set up your bank',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 8,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: busy || importingBank
+                              ? null
+                              : () => importBankCode(false),
+                          icon: const Icon(Icons.qr_code_scanner),
+                          label: const Text('Scan bank QR'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: busy || importingBank
+                              ? null
+                              : () => importBankCode(true),
+                          icon: const Icon(Icons.photo_library_outlined),
+                          label: const Text('Choose QR image'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Hint(
+                      bankSetupStatus ??
+                          'Scan or choose the bank setup QR to fill both fields, or enter them manually.',
+                    ),
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: url,
+                      keyboardType: TextInputType.url,
+                      autocorrect: false,
+                      decoration: const InputDecoration(
+                        labelText: 'Bank HTTPS URL',
+                        hintText: 'https://your-bank.example',
+                        prefixIcon: Icon(Icons.account_balance_outlined),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: account,
+                      inputFormatters: [
+                        LowercasePaymentIdFormatter(),
+                        FilteringTextInputFormatter.allow(
+                          RegExp(r'[a-z0-9@._-]'),
+                        ),
+                      ],
+                      textCapitalization: TextCapitalization.none,
+                      autocorrect: false,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: const InputDecoration(
+                        labelText: 'Payment ID',
+                        hintText: 'yourname@beyondnet',
+                        prefixIcon: Icon(Icons.alternate_email),
+                      ),
+                    ),
+                    if (signup) ...[
+                      const SizedBox(height: 8),
+                      if (checkingId) const Hint('Checking available IDs…'),
+                      if (!checkingId && idCheckMessage != null)
+                        Text(
+                          idCheckMessage!,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: idAvailable == true ? teal : muted,
+                          ),
+                        ),
+                      if (suggestedIds.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        const Hint('Suggested IDs · tap one or enter your own'),
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 4,
+                          children: suggestedIds
+                              .map(
+                                (id) => ActionChip(
+                                  label: Text(id),
+                                  onPressed: busy
+                                      ? null
+                                      : () {
+                                          account.text = id;
+                                          account.selection =
+                                              TextSelection.collapsed(
+                                                offset: id.length,
+                                              );
+                                        },
+                                ),
+                              )
+                              .toList(),
+                        ),
+                      ],
+                    ],
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: password,
+                      obscureText: !visible,
+                      decoration: InputDecoration(
+                        labelText: 'Password (at least 8 characters)',
+                        prefixIcon: const Icon(Icons.lock_outline),
+                        suffixIcon: IconButton(
+                          onPressed: () => setState(() => visible = !visible),
+                          icon: Icon(
+                            visible
+                                ? Icons.visibility_off_outlined
+                                : Icons.visibility_outlined,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: fingerprint,
+                      autocorrect: false,
+                      maxLines: 2,
+                      decoration: const InputDecoration(
+                        labelText: 'Bank trust fingerprint',
+                        hintText:
+                            'Paste the 64-character fingerprint from Device setup on the laptop',
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    const Hint(
+                      'Compare this fingerprint with your laptop before enrolling. It pins the bank’s signing and encryption keys.',
+                    ),
+                    const SizedBox(height: 20),
+                    FilledButton(
+                      onPressed: busy || importingBank ? null : submit,
+                      child: busy
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : Text(
+                              widget.renewal
+                                  ? 'Renew access'
+                                  : signup
+                                  ? 'Create account & continue'
+                                  : 'Sign in securely',
+                            ),
+                    ),
+                    const SizedBox(height: 20),
+                    const SizedBox(height: 25),
+                    const Center(
+                      child: Hint('DEMO MONEY ONLY · NO REAL UPI CREDENTIALS'),
+                    ),
+                    const SizedBox(height: 15),
+                  ],
+                ),
               ),
-              const SizedBox(height: 20),
-              const SizedBox(height: 25),
-              const Center(
-                child: Hint('DEMO MONEY ONLY · NO REAL UPI CREDENTIALS'),
-              ),
-              const SizedBox(height: 15),
-            ],
+            ),
+          ),
+        );
+}
+
+class NearbyOverview extends StatelessWidget {
+  final int phones;
+  final bool ready, online;
+  const NearbyOverview({
+    super.key,
+    required this.phones,
+    required this.ready,
+    required this.online,
+  });
+  @override
+  Widget build(BuildContext context) => IntrinsicHeight(
+    child: Row(
+      children: [
+        Expanded(
+          child: Box(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.people_outline, color: teal, size: 24),
+                const SizedBox(height: 12),
+                Text(
+                  '$phones',
+                  style: const TextStyle(
+                    fontSize: 27,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const Hint('Verified phones'),
+              ],
+            ),
           ),
         ),
-      ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Box(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  ready
+                      ? Icons.check_circle_outline
+                      : Icons.bluetooth_searching,
+                  color: ready ? teal : muted,
+                  size: 24,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  ready ? 'Nearby is on' : 'Nearby is off',
+                  style: const TextStyle(
+                    fontSize: 19,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Hint(
+                  ready
+                      ? (online ? 'Bank reachable' : 'Automatic forwarding')
+                      : 'Enable to carry requests',
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     ),
   );
 }
 
 class Shell extends StatefulWidget {
   final BeyondNetEngine engine;
-  const Shell({super.key, required this.engine});
+  final int initialTab;
+  const Shell({super.key, required this.engine, this.initialTab = 0});
   @override
   State<Shell> createState() => _ShellState();
 }
 
 class _ShellState extends State<Shell> {
-  int tab = 0;
+  late int tab = widget.initialTab;
   bool starting = false;
   bool changingRelay = false, relayStarting = false;
   BeyondNetEngine get e => widget.engine;
@@ -721,62 +1001,64 @@ class _ShellState extends State<Shell> {
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: e,
-    builder: (context, _) => Scaffold(
-      appBar: AppBar(
-        title: tab == 0
-            ? const Brand()
-            : Text(['', 'Activity', 'Nearby network', 'Your device'][tab]),
-        actions: [
-          IconButton(
-            tooltip: 'Device settings',
-            onPressed: () => setState(() => tab = 3),
-            icon: CircleAvatar(
-              radius: 17,
-              backgroundColor: const Color(0xffe2efe7),
-              child: Text(
-                (e.account?['name'] ?? 'K').toString().substring(0, 1),
-                style: const TextStyle(color: teal, fontSize: 14),
+    builder: (context, _) {
+      return Scaffold(
+        appBar: AppBar(
+          title: tab == 0
+              ? const Brand()
+              : Text(['', 'Activity', 'Nearby network', 'Your device'][tab]),
+          actions: [
+            IconButton(
+              tooltip: 'Device settings',
+              onPressed: () => setState(() => tab = 3),
+              icon: CircleAvatar(
+                radius: 17,
+                backgroundColor: const Color(0xffe2efe7),
+                child: Text(
+                  (e.account?['name'] ?? 'K').toString().substring(0, 1),
+                  style: const TextStyle(color: teal, fontSize: 14),
+                ),
               ),
             ),
-          ),
-        ],
-        toolbarHeight: 75,
-      ),
-      body: SafeArea(
-        top: false,
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 650),
-            child: [home(), activity(), nearbyPage(), settings()][tab],
+          ],
+          toolbarHeight: 75,
+        ),
+        body: SafeArea(
+          top: false,
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 650),
+              child: [home(), activity(), nearbyPage(), settings()][tab],
+            ),
           ),
         ),
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: tab,
-        onDestinationSelected: (i) => setState(() => tab = i),
-        backgroundColor: Colors.white,
-        indicatorColor: const Color(0xffdef0e7),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home_rounded),
-            label: 'Home',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.receipt_long_outlined),
-            label: 'Activity',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.hub_outlined),
-            label: 'Nearby',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.tune_rounded),
-            label: 'Device',
-          ),
-        ],
-      ),
-    ),
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: tab,
+          onDestinationSelected: (i) => setState(() => tab = i),
+          backgroundColor: Colors.white,
+          indicatorColor: const Color(0xffdef0e7),
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.home_outlined),
+              selectedIcon: Icon(Icons.home_rounded),
+              label: 'Home',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.receipt_long_outlined),
+              label: 'Activity',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.hub_outlined),
+              label: 'Nearby',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.tune_rounded),
+              label: 'Device',
+            ),
+          ],
+        ),
+      );
+    },
   );
   Widget home() => ListView(
     padding: const EdgeInsets.fromLTRB(23, 12, 23, 28),
@@ -1036,16 +1318,14 @@ class _ShellState extends State<Shell> {
         Hint(
           e.bankReachable
               ? 'Pay directly. ${e.liveConnected ? 'Live payment updates are connected.' : 'Payment status will sync automatically.'}'
-              : 'You can still send a payment through a nearby phone. Enable Bluetooth, allow Nearby devices (Location access on Android 10–11), scan and connect to a verified relay.',
+              : 'Create a payment using a saved recipient or their QR. After authorization, nearby phones can carry your request to the bank.',
         ),
         if (!e.bankReachable) ...[
           const SizedBox(height: 12),
           FilledButton.icon(
             onPressed: () => setState(() => tab = 2),
             icon: const Icon(Icons.bluetooth_searching),
-            label: Text(
-              e.canPay ? 'Nearby connection ready' : 'Set up offline payments',
-            ),
+            label: Text('Nearby delivery settings'),
           ),
           const SizedBox(height: 6),
           const Hint(
@@ -1057,10 +1337,6 @@ class _ShellState extends State<Shell> {
   );
 
   void beginPay({bool scanCode = false}) {
-    if (!e.canPay) {
-      setState(() => tab = 2);
-      return;
-    }
     if (scanCode) {
       unawaited(scan());
     } else {
@@ -1300,44 +1576,10 @@ class _ShellState extends State<Shell> {
         ),
       ),
       const SizedBox(height: 20),
-      Row(
-        children: [
-          Expanded(
-            child: Box(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '${e.nearby.length}',
-                    style: const TextStyle(
-                      fontSize: 27,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const Hint('Verified peers'),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Box(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '${e.queueSize}',
-                    style: const TextStyle(
-                      fontSize: 27,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const Hint('Active packets'),
-                ],
-              ),
-            ),
-          ),
-        ],
+      NearbyOverview(
+        phones: e.nearby.length,
+        ready: e.relay,
+        online: e.bankReachable,
       ),
       const SizedBox(height: 20),
       OutlinedButton.icon(
@@ -1372,7 +1614,7 @@ class _ShellState extends State<Shell> {
                   ),
                   const SizedBox(height: 7),
                   const Hint(
-                    'You cannot read or change the payment. Accepting stores it; an online phone sends it to the bank automatically.',
+                    'Accepting saves this encrypted request and automatically looks for bank access or the next phone. Your money is never used.',
                   ),
                   Row(
                     children: [
@@ -1382,6 +1624,7 @@ class _ShellState extends State<Shell> {
                             await e.decideRelayInvitation(
                               invitation['id'] as String,
                               false,
+                              token: invitation['offer_token'] as String?,
                             );
                           } catch (error) {
                             if (mounted) await alert(context, error);
@@ -1395,12 +1638,13 @@ class _ShellState extends State<Shell> {
                             await e.decideRelayInvitation(
                               invitation['id'] as String,
                               true,
+                              token: invitation['offer_token'] as String?,
                             );
                           } catch (error) {
                             if (mounted) await alert(context, error);
                           }
                         },
-                        child: const Text('Allow relay'),
+                        child: const Text('Accept & carry'),
                       ),
                     ],
                   ),
@@ -1411,57 +1655,12 @@ class _ShellState extends State<Shell> {
         ),
         const SizedBox(height: 10),
       ],
-      if (!e.bankReachable && e.relayQueue.isNotEmpty) ...[
-        const Eyebrow('CHOOSE THE NEXT PHONE'),
-        const SizedBox(height: 10),
-        ...e.relayQueue.map(
-          (packet) => Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: Box(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Encrypted request ${(packet['id'] as String).substring(0, 8)}',
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 7),
-                  Hint(
-                    packet['next_peer'] == null
-                        ? 'This phone is offline. Select another verified phone to ask it to carry the request.'
-                        : 'Next phone selected. You can choose a different one if it is unavailable.',
-                  ),
-                  ...e.nearby
-                      .where((p) => p['device_id'] != packet['source'])
-                      .map(
-                        (peer) => TextButton.icon(
-                          icon: Icon(
-                            peer['online'] == true
-                                ? Icons.cloud_done
-                                : Icons.bluetooth,
-                          ),
-                          label: Text(
-                            'Request ${peer['name']} · ${peer['online'] == true ? 'internet on' : 'internet off'}',
-                          ),
-                          onPressed: () async {
-                            try {
-                              await e.chooseRelayRoute(
-                                packet['id'] as String,
-                                peer['device_id'] as String,
-                              );
-                            } catch (error) {
-                              if (mounted) await alert(context, error);
-                            }
-                          },
-                        ),
-                      ),
-                ],
-              ),
-            ),
+      if (!e.bankReachable && e.relayQueue.isNotEmpty)
+        const Box(
+          child: Hint(
+            'Accepted requests are saved. This phone automatically looks for bank access or another nearby carrier.',
           ),
         ),
-        const SizedBox(height: 10),
-      ],
       if (e.nearby.isEmpty)
         const Box(
           child: Hint(
@@ -1501,31 +1700,6 @@ class _ShellState extends State<Shell> {
                       ? 'Internet gateway available'
                       : 'Nearby relay · internet route not yet known',
                 ),
-                if (!e.bankReachable &&
-                    e.invitations.isEmpty &&
-                    e.relayQueue.isEmpty) ...[
-                  const SizedBox(height: 10),
-                  FilledButton(
-                    onPressed: starting
-                        ? null
-                        : () async {
-                            setState(() => starting = true);
-                            try {
-                              await e.connectNearby(p['device_id']);
-                              if (mounted) setState(() => tab = 0);
-                            } catch (error) {
-                              if (mounted) await alert(context, error);
-                            } finally {
-                              if (mounted) setState(() => starting = false);
-                            }
-                          },
-                    child: Text(
-                      e.connectedPeer == p['device_id'] && e.canPay
-                          ? 'Connected · continue'
-                          : 'Connect for payment',
-                    ),
-                  ),
-                ],
               ],
             ),
           ),
@@ -2105,7 +2279,9 @@ class PaymentDetails extends StatelessWidget {
                   ? 'Payment rejected'
                   : expired
                   ? 'Outcome not yet known'
-                  : 'On its way',
+                  : engine.bankReachable
+                  ? 'Sending payment request'
+                  : 'Finding a way to the bank',
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
             ),
@@ -2134,6 +2310,44 @@ class PaymentDetails extends StatelessWidget {
                   color: Colors.red,
                   fontWeight: FontWeight.w600,
                 ),
+              ),
+            ],
+            if (!paid && !rejected && !expired) ...[
+              const SizedBox(height: 18),
+              const LinearProgressIndicator(),
+              const SizedBox(height: 12),
+              Text(
+                p['transport'] ?? 'Looking for a nearby phone',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Delivery window: ${((p['expires_at'] as int) - nowSeconds).clamp(0, 600)} seconds remaining',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: muted),
+              ),
+              if (!engine.bankReachable && !engine.relay)
+                FilledButton.icon(
+                  icon: const Icon(Icons.bluetooth_searching),
+                  label: const Text('Enable nearby delivery'),
+                  onPressed: engine.relayChanging
+                      ? null
+                      : () async {
+                          try {
+                            if (Platform.isAndroid) {
+                              await NearbyPermissions.ensureAndroidReady()
+                                  .timeout(const Duration(seconds: 60));
+                            }
+                            await engine.startRelay();
+                            await engine.retryNow();
+                          } catch (error) {
+                            if (context.mounted) await alert(context, error);
+                          }
+                        },
+                ),
+              if (engine.relayBlocked != null) Hint(engine.relayBlocked!),
+              const Hint(
+                'You can leave this screen. A relay acceptance confirms storage; your payment is confirmed when the bank receipt arrives.',
               ),
             ],
             const SizedBox(height: 28),
@@ -2199,7 +2413,7 @@ class PaymentDetails extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               const Hint(
-                'Do not create a new payment to retry this one. The saved request keeps the same payment ID. Keep Nearby relay on; a connected gateway must be reachable.',
+                'Do not create a new payment to retry this one. The saved request keeps the same payment ID. Keep Nearby relay on. Offline carriers can pass it onward until a phone can reach the bank.',
               ),
             ],
             const SizedBox(height: 20),

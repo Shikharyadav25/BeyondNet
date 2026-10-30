@@ -3,6 +3,8 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 
+const maxRelayHops = 8;
+
 typedef Json = Map<String, dynamic>;
 Object? _sorted(Object? v) {
   if (v is Map) {
@@ -123,9 +125,9 @@ Future<void> checkPacket(Json p) async {
   }
   if (p['hops'] is! int ||
       p['hops'] < 0 ||
-      p['hops'] > 4 ||
+      p['hops'] > maxRelayHops ||
       p['path'] is! List ||
-      p['path'].length > 8) {
+      p['path'].length > maxRelayHops + 1) {
     throw const FormatException('Invalid routing metadata');
   }
   for (final name in ['path', 'trail']) {
@@ -134,7 +136,7 @@ Future<void> checkPacket(Json p) async {
       continue; // v1 peers remain compatible.
     }
     if (value is! List ||
-        value.length > (name == 'trail' ? 4 : 8) ||
+        value.length > (name == 'trail' ? maxRelayHops : maxRelayHops + 1) ||
         (name == 'trail' && value.length > p['hops']) ||
         value.any((id) => id is! String || id.isEmpty || id.length > 80) ||
         value.toSet().length != value.length) {

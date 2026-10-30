@@ -75,6 +75,7 @@ abstract interface class PeerTransport {
 }
 
 class BleTransport implements PeerTransport {
+  static BleTransport? _owner;
   final bool campus;
   UUID get _serviceId => campus
       ? UUID.fromString('f953c620-4f9e-4ac8-a6d6-6f666b61726f')
@@ -118,6 +119,21 @@ class BleTransport implements PeerTransport {
   @override
   Future<void> start() async {
     if (running) return;
+    if (_owner != null && _owner != this) {
+      throw StateError(
+        'Nearby Bluetooth is being used by ${_owner!.campus ? 'Campus' : 'Payments'}. Turn off Nearby in that feature before switching. Saved requests are retained.',
+      );
+    }
+    _owner = this;
+    try {
+      await _start();
+    } catch (_) {
+      if (_owner == this) _owner = null;
+      rethrow;
+    }
+  }
+
+  Future<void> _start() async {
     // Managers resolve initial poweredOn asynchronously after construction.
     final deadline = DateTime.now().add(const Duration(seconds: 8));
     while ((central.state != BluetoothLowEnergyState.poweredOn ||
@@ -178,8 +194,9 @@ class BleTransport implements PeerTransport {
               final request = Map<String, dynamic>.from(
                 jsonDecode(utf8.decode(value)),
               );
-              final result = await handler(request)
-                  .timeout(const Duration(seconds: 20));
+              final result = await handler(
+                request,
+              ).timeout(const Duration(seconds: 20));
               outgoing[id] = frames(canonical(result));
             } catch (_) {
               outgoing[id] = frames(
@@ -241,14 +258,18 @@ class BleTransport implements PeerTransport {
       ],
       descriptors: [],
     );
+    var startupStep = 'opening Bluetooth service';
     try {
       // Android may retain a closed/busy GATT server after a failed start or
       // adapter restart. Open a fresh session and retry bounded registration.
       // Cleanup covers registration too, not only advertising/discovery.
       for (var attempt = 0; attempt < 3; attempt++) {
         try {
+          startupStep = 'opening Bluetooth service';
           await androidSession?.reopen();
+          startupStep = 'clearing old Bluetooth services';
           await peripheral.removeAllServices().timeout(operationTimeout);
+          startupStep = 'registering the payment service';
           await peripheral
               .addService(
                 GATTService(
@@ -292,14 +313,18 @@ class BleTransport implements PeerTransport {
           );
         }
       }
+      startupStep = 'advertising this phone';
       await peripheral
           .startAdvertising(
             Advertisement(
-              name: campus ? 'BeyondNet Campus' : 'BeyondNet',
+              // The service UUID identifies the app. Setting a name makes the
+              // Android plugin rename the entire phone and await a broadcast
+              // that some devices never deliver. Avoid that startup dependency.
               serviceUUIDs: [_serviceId],
             ),
           )
           .timeout(operationTimeout);
+      startupStep = 'scanning for nearby phones';
       await central.startDiscovery().timeout(operationTimeout);
       running = true;
       cleanup = Timer.periodic(const Duration(seconds: 20), (_) {
@@ -321,7 +346,7 @@ class BleTransport implements PeerTransport {
       await stop();
       if (error is TimeoutException) {
         throw StateError(
-          'Bluetooth did not finish starting. Turn Bluetooth off and on, '
+          'Bluetooth timed out while $startupStep. Turn Bluetooth off and on, '
           'then try Nearby relay again. Your saved payments are retained.',
         );
       }
@@ -375,12 +400,14 @@ class BleTransport implements PeerTransport {
         final request = Map<String, dynamic>.from(
           jsonDecode(utf8.decode(message)),
         );
-        final result = await handler(request)
-            .timeout(const Duration(seconds: 20));
+        final result = await handler(
+          request,
+        ).timeout(const Duration(seconds: 20));
         var frameBytes = 20;
         try {
-          frameBytes = (await peripheral.getMaximumNotifyLength(e.central))
-              .clamp(20, 180);
+          frameBytes = (await peripheral.getMaximumNotifyLength(
+            e.central,
+          )).clamp(20, 180);
         } catch (_) {}
         session.response = BleFrames.encode(
           canonical(result),
@@ -525,6 +552,7 @@ class BleTransport implements PeerTransport {
 
   @override
   Future<void> stop() async {
+    if (_owner != null && _owner != this) return;
     running = false;
     cleanup?.cancel();
     // Always detach handlers and close the GATT session even if Android never
@@ -550,5 +578,6 @@ class BleTransport implements PeerTransport {
       if (androidSession != null) attempt(androidSession!.close),
       for (final cancellation in cancellations) attempt(() => cancellation),
     ]);
+    if (_owner == this) _owner = null;
   }
 }

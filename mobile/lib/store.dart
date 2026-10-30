@@ -1,6 +1,8 @@
 import 'dart:convert';
+
 import 'package:sqflite/sqflite.dart';
 import 'package:path_provider/path_provider.dart';
+
 import 'protocol.dart';
 
 class LocalStore {
@@ -11,7 +13,7 @@ class LocalStore {
         '${(await getApplicationSupportDirectory()).path}/offline-karo.sqlite3';
     db = await openDatabase(
       path,
-      version: 5,
+      version: 7,
       onConfigure: (db) async {
         // This assignment returns a row. Android's execSQL rejects statements
         // with results, so use the query path even though it sets a value.
@@ -25,6 +27,8 @@ class LocalStore {
         }
         if (old < 4) await _createReplayTable(db);
         if (old < 5) await _createInvitationTables(db);
+        if (old < 6) await _createConnectionTable(db);
+        if (old < 7) await _createDeliveryTables(db);
       },
       onCreate: (db, _) async {
         await db.execute(
@@ -48,9 +52,160 @@ class LocalStore {
         await _createRelayTables(db);
         await _createReplayTable(db);
         await _createInvitationTables(db);
+        await _createConnectionTable(db);
+        await _createDeliveryTables(db);
       },
     );
   }
+
+  static Future<void> _createDeliveryTables(DatabaseExecutor db) async {
+    await db.execute(
+      'CREATE TABLE delivery_proofs(id TEXT PRIMARY KEY,data TEXT NOT NULL,expiry INTEGER NOT NULL)',
+    );
+    await db.execute(
+      'CREATE TABLE delivery_attempts(packet TEXT NOT NULL,peer TEXT NOT NULL,token TEXT NOT NULL,deadline INTEGER NOT NULL,state TEXT NOT NULL,at INTEGER NOT NULL,PRIMARY KEY(packet,peer))',
+    );
+    await db.execute(
+      'ALTER TABLE relay_invitations ADD COLUMN offer_deadline INTEGER',
+    );
+    await db.execute(
+      'ALTER TABLE relay_invitations ADD COLUMN offer_token TEXT',
+    );
+  }
+
+  Future<List<Json>> proofs() async =>
+      (await db.query(
+            'delivery_proofs',
+            where: 'expiry>?',
+            whereArgs: [nowSeconds],
+            orderBy: 'id',
+            limit: 1000,
+          ))
+          .map(
+            (r) => Map<String, dynamic>.from(jsonDecode(r['data'] as String)),
+          )
+          .toList();
+
+  Future<void> saveProof(Json proof) => db.transaction((tx) async {
+    final b = proof['body'];
+    final exists = await tx.query(
+      'delivery_proofs',
+      where: 'id=?',
+      whereArgs: [b['packet_id']],
+    );
+    if (exists.isNotEmpty) {
+      final previous = jsonDecode(exists.single['data'] as String)['body'];
+      if (previous['recorded_at'] > b['recorded_at']) return;
+    }
+    if (exists.isEmpty &&
+        Sqflite.firstIntValue(
+              await tx.rawQuery(
+                'SELECT COUNT(*) FROM delivery_proofs WHERE expiry>?',
+                [nowSeconds],
+              ),
+            )! >=
+            1000) {
+      throw StateError('Delivery proof storage full');
+    }
+    await tx.insert('delivery_proofs', {
+      'id': b['packet_id'],
+      'data': jsonEncode(proof),
+      'expiry': b['expires_at'],
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    await tx.update(
+      'packets',
+      {'uploaded': 1},
+      where: 'id=?',
+      whereArgs: [b['packet_id']],
+    );
+  });
+
+  Future<Json?> offerFor(
+    String packet,
+    String peer,
+    int expiry,
+  ) => db.transaction((tx) async {
+    if (expiry <= nowSeconds) return null;
+    final done = await tx.query(
+      'delivery_proofs',
+      where: 'id=? AND expiry>?',
+      whereArgs: [packet, nowSeconds],
+    );
+    if (done.isNotEmpty) return null;
+    final attempts = await tx.query(
+      'delivery_attempts',
+      where: 'packet=?',
+      whereArgs: [packet],
+    );
+    final same = attempts.where((r) => r['peer'] == peer).firstOrNull;
+    if (same != null && same['state'] == 'declined') return null;
+    if (same != null &&
+        same['state'] == 'pending' &&
+        (same['deadline'] as int) > nowSeconds) {
+      return Map<String, dynamic>.from(same);
+    }
+    // A disconnected custodian may still be delivering. Use a passive recovery
+    // copy for at least 60 seconds before trying a different downstream carrier.
+    if (attempts.any(
+      (r) =>
+          r['state'] != 'declined' &&
+          (r['state'] == 'pending'
+              ? (r['deadline'] as int) > nowSeconds
+              : (r['at'] as int) > nowSeconds - 60),
+    )) {
+      return null;
+    }
+    // Revisit the same timed-out pending carrier without growing the copy
+    // budget. A new offer generation cannot revive an old notification action.
+    if (same != null && same['state'] == 'accepted') return null;
+    if (same == null &&
+        attempts.where((r) => r['state'] != 'declined').length >= 2) {
+      return null;
+    }
+    if (attempts.length >= 32 && same == null) return null;
+    final value = <String, dynamic>{
+      'packet': packet,
+      'peer': peer,
+      'token': randomCapability(),
+      'deadline': expiry < nowSeconds + 30 ? expiry : nowSeconds + 30,
+      'state': 'pending',
+      'at': nowSeconds,
+    };
+    await tx.insert(
+      'delivery_attempts',
+      value,
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    return value;
+  });
+
+  Future<void> offerResult(String packet, String peer, String state) async {
+    await db.update(
+      'delivery_attempts',
+      {'state': state, 'at': nowSeconds},
+      where: 'packet=? AND peer=?',
+      whereArgs: [packet, peer],
+    );
+  }
+
+  Future<void> deliveryText(String packet, String text) =>
+      db.transaction((tx) async {
+        for (final row in await tx.query('payments')) {
+          final value = Map<String, dynamic>.from(
+            jsonDecode(row['data'] as String),
+          );
+          if (value['packet_id'] == packet &&
+              !['paid', 'rejected'].contains(value['state'])) {
+            value['transport'] = text;
+            await tx.update(
+              'payments',
+              {'data': jsonEncode(value)},
+              where: 'id=?',
+              whereArgs: [row['id']],
+            );
+          }
+        }
+      });
 
   static Future<void> _createReplayTable(DatabaseExecutor db) async {
     await db.execute(
@@ -124,7 +279,68 @@ class LocalStore {
     );
   }
 
-  Future<String> invite(Json packet, String source, String name) async {
+  static Future<void> _createConnectionTable(DatabaseExecutor db) => db.execute(
+    'CREATE TABLE relay_connections(peer TEXT PRIMARY KEY, name TEXT NOT NULL, state TEXT NOT NULL, expiry INTEGER NOT NULL)',
+  );
+
+  Future<Json?> connection(String peer) async {
+    final rows = await db.query(
+      'relay_connections',
+      where: 'peer=? AND expiry>?',
+      whereArgs: [peer, nowSeconds],
+    );
+    return rows.isEmpty ? null : Map<String, dynamic>.from(rows.single);
+  }
+
+  Future<bool> requestConnection(String peer, String name) => db.transaction((
+    tx,
+  ) async {
+    await tx.delete(
+      'relay_connections',
+      where: 'expiry<=?',
+      whereArgs: [nowSeconds],
+    );
+    if ((await tx.query(
+      'relay_connections',
+      where: 'peer=?',
+      whereArgs: [peer],
+    )).isNotEmpty) {
+      return false;
+    }
+    final rows = await tx.query('relay_connections');
+    if (rows.length >= 40) throw StateError('Too many connection requests.');
+    await tx.insert('relay_connections', {
+      'peer': peer,
+      'name': name.substring(0, name.length.clamp(0, 80)),
+      'state': 'pending',
+      'expiry': nowSeconds + 180,
+    });
+    return true;
+  });
+
+  Future<List<Json>> connectionRequests() async => (await db.query(
+    'relay_connections',
+    where: "state='pending' AND expiry>? ",
+    whereArgs: [nowSeconds],
+  )).map((row) => Map<String, dynamic>.from(row)).toList();
+
+  Future<void> decideConnection(String peer, bool allow) async {
+    final changed = await db.update(
+      'relay_connections',
+      {'state': allow ? 'accepted' : 'declined', 'expiry': nowSeconds + 600},
+      where: "peer=? AND state='pending' AND expiry>?",
+      whereArgs: [peer, nowSeconds],
+    );
+    if (changed != 1) throw StateError('This connection request has expired.');
+  }
+
+  Future<String> invite(
+    Json packet,
+    String source,
+    String name, {
+    int? deadline,
+    String? token,
+  }) async {
     await checkPacket(packet);
     if (packet['expires_at'] <= nowSeconds) {
       throw StateError('Payment request expired');
@@ -149,7 +365,30 @@ class LocalStore {
         where: 'id=?',
         whereArgs: [packet['id']],
       );
-      if (existing.isNotEmpty) return existing.single['state'] as String;
+      if (existing.isNotEmpty) {
+        final row = existing.single;
+        if (row['state'] == 'accepted' || row['state'] == 'declined') {
+          return row['state'] as String;
+        }
+        if (deadline != null && token != row['offer_token']) {
+          await tx.update(
+            'relay_invitations',
+            {
+              'state': 'pending',
+              'offer_deadline': deadline,
+              'offer_token': token,
+            },
+            where: 'id=?',
+            whereArgs: [packet['id']],
+          );
+          return 'pending';
+        }
+        if (row['offer_deadline'] != null &&
+            (row['offer_deadline'] as int) <= clock) {
+          return 'expired';
+        }
+        return row['state'] as String;
+      }
       final count = Sqflite.firstIntValue(
         await tx.rawQuery(
           "SELECT COUNT(*) FROM relay_invitations WHERE state='pending' AND expiry>?",
@@ -172,6 +411,8 @@ class LocalStore {
         'data': jsonEncode(packet),
         'expiry': packet['expires_at'],
         'state': 'pending',
+        'offer_deadline': deadline,
+        'offer_token': token,
       });
       return 'new';
     });
@@ -179,12 +420,13 @@ class LocalStore {
 
   Future<List<Json>> invitations() async => (await db.query(
     'relay_invitations',
-    where: "state='pending' AND expiry>?",
-    whereArgs: [nowSeconds],
+    where:
+        "state='pending' AND expiry>? AND (offer_deadline IS NULL OR offer_deadline>?)",
+    whereArgs: [nowSeconds, nowSeconds],
     orderBy: 'rowid DESC',
   )).map((r) => Map<String, dynamic>.from(r)).toList();
 
-  Future<Json?> decideInvitation(String id, bool allow) async {
+  Future<Json?> decideInvitation(String id, bool allow, {String? token}) async {
     return db.transaction((tx) async {
       final rows = await tx.query(
         'relay_invitations',
@@ -193,7 +435,12 @@ class LocalStore {
       );
       if (rows.isEmpty || rows.single['state'] != 'pending') return null;
       final row = rows.single;
-      if ((row['expiry'] as int) <= nowSeconds) {
+      if (token != null && row['offer_token'] != token) {
+        throw StateError('This offer has ended. Reopen the current request.');
+      }
+      if ((row['expiry'] as int) <= nowSeconds ||
+          (row['offer_deadline'] != null &&
+              (row['offer_deadline'] as int) <= nowSeconds)) {
         await tx.update(
           'relay_invitations',
           {'state': 'expired'},
@@ -426,6 +673,13 @@ class LocalStore {
       jsonDecode(rows.first['data'] as String),
     );
     if (['paid', 'rejected'].contains(p['state'])) return;
+    if ((await tx.query(
+      'delivery_proofs',
+      where: 'id=? AND expiry>?',
+      whereArgs: [p['packet_id'], nowSeconds],
+    )).isNotEmpty) {
+      return;
+    }
     p['state'] = 'relayed';
     p['transport'] =
         'Another phone acknowledged storage; awaiting bank receipt';
@@ -483,6 +737,16 @@ class LocalStore {
     'data': jsonEncode(cert),
   }, conflictAlgorithm: ConflictAlgorithm.replace);
   Future<void> cleanup() async {
+    await db.delete(
+      'delivery_proofs',
+      where: 'expiry<=?',
+      whereArgs: [nowSeconds],
+    );
+    await db.delete(
+      'delivery_attempts',
+      where: 'at<?',
+      whereArgs: [nowSeconds - 7 * 86400],
+    );
     await db.update(
       'relay_invitations',
       {'state': 'expired'},

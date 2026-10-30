@@ -53,6 +53,20 @@ void main() {
     (tester) async {
       final engine = InterruptedEnrollmentEngine();
       await tester.pumpWidget(MaterialApp(home: LoginPage(engine: engine)));
+      await reveal(tester, 'Your name');
+      await tester.enterText(
+        find.byWidgetPredicate(
+          (w) => w is TextField && w.decoration?.labelText == 'Your name',
+        ),
+        'Demo user',
+      );
+      await reveal(tester, 'Bank HTTPS URL');
+      await tester.enterText(
+        find.byWidgetPredicate(
+          (w) => w is TextField && w.decoration?.labelText == 'Bank HTTPS URL',
+        ),
+        'https://bank.example',
+      );
       await reveal(tester, 'Payment ID');
       final account = tester
           .widget<TextField>(
@@ -74,10 +88,27 @@ void main() {
             ),
           )
           .controller!;
+      await reveal(tester, 'Bank trust fingerprint');
+      await tester.enterText(
+        find.byWidgetPredicate(
+          (w) =>
+              w is TextField &&
+              w.decoration?.labelText == 'Bank trust fingerprint',
+        ),
+        'a' * 64,
+      );
       account.text = 'existing@beyondnet';
       password.text = 'test-password';
+      await tester.pumpAndSettle();
       await reveal(tester, 'Create account & continue');
+      await tester.ensureVisible(find.text('Create account & continue'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Create account & continue'));
+      await tester.pumpAndSettle();
+      await reveal(tester, 'Skip for now');
+      await tester.ensureVisible(find.text('Skip for now'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Skip for now'));
       await tester.pumpAndSettle();
       expect(
         find.text(
@@ -86,6 +117,8 @@ void main() {
         findsOneWidget,
       );
       await tester.tap(find.text('Got it'));
+      await tester.pumpAndSettle();
+      await reveal(tester, 'Sign in securely');
       await tester.pumpAndSettle();
       expect(find.text('Sign in securely'), findsOneWidget);
       expect(account.text, 'existing@beyondnet');

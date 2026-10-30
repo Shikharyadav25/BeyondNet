@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -9,6 +10,7 @@ import 'package:cryptography/cryptography.dart';
 import 'package:http/http.dart' as http;
 import 'package:local_auth/local_auth.dart';
 import 'package:uuid/uuid.dart';
+
 import 'protocol.dart';
 import 'store.dart';
 import 'ble_transport.dart';
@@ -66,6 +68,30 @@ class BeyondNetEngine extends ChangeNotifier {
   List<Json> merchants = [];
   List<Json> payments = [], receipts = [], events = [], invitations = [];
   List<Json> relayQueue = [];
+  List<Json> connectionRequests = [];
+  final Map<String, Json> connectionStates = {};
+  bool seekingRelay = false;
+  int? notificationTab;
+  bool connectionApproved(String id) =>
+      connectionStates[id]?['state'] == 'accepted' &&
+      (connectionStates[id]?['expiry'] as int? ?? 0) > nowSeconds;
+  String connectionLabel(String id) {
+    if (connectionApproved(id)) return 'Approved · ready to pay offline';
+    return switch (connectionStates[id]?['state']) {
+      'pending' => 'Waiting for connection approval',
+      'declined' => 'Connection declined · choose another phone',
+      'offline' => 'Relay cannot reach the bank',
+      'unsupported' => 'Update this phone to approve connections',
+      _ => 'Request connection for payment',
+    };
+  }
+
+  void findPaymentRelay() {
+    seekingRelay = true;
+    notifyListeners();
+    unawaited(tick());
+  }
+
   List<Json> nearby = [];
   List<String> allowlist = [];
   int queueSize = 0;
@@ -120,20 +146,24 @@ class BeyondNetEngine extends ChangeNotifier {
     // snapshot less unresolved local intents; expiry alone never releases them.
     if (bankReachable &&
         DateTime.now().difference(_lastProfileRefresh).inSeconds >= 5) {
-      await refreshProfile();
+      try {
+        await refreshProfile();
+      } on SocketException {
+        bankReachable = false;
+      } on TimeoutException {
+        bankReachable = false;
+      }
     }
     await _ensurePaymentFunds(amount);
   }
 
   String? connectedPeer;
+  // Authorization is independent of connectivity. Bank reachability only
+  // determines whether delivery is direct or queued for Bluetooth carriage.
   bool get canPay =>
-      bankReachable ||
-      (relay &&
-          connectedPeer != null &&
-          nearby.any(
-            (p) =>
-                p['device_id'] == connectedPeer && p['at'] >= nowSeconds - 45,
-          ));
+      profile != null &&
+      pinConfigured &&
+      certificate['body']['expires_at'] > nowSeconds;
   bool get liveConnected => _socket != null && _liveReady;
   WebSocket? _socket;
   bool _liveReady = false, _openingSocket = false, _disposed = false;
@@ -153,6 +183,7 @@ class BeyondNetEngine extends ChangeNotifier {
   final Map<String, int> peerFailures = {};
   final Map<String, String> identityByRadio = {};
   final Map<String, int> _offeredPackets = {};
+  final Map<String, int> _discoveryStarted = {};
   final Random _jitter = Random();
   int _peerRound = 0;
   Future<void> init({String? databasePath}) async {
@@ -238,6 +269,40 @@ class BeyondNetEngine extends ChangeNotifier {
       );
     }
     return data;
+  }
+
+  Future<Json> paymentIdChoices(
+    String url,
+    String fingerprint,
+    String name,
+    String id,
+  ) async {
+    final uri = Uri.tryParse(url.trim());
+    if (uri == null ||
+        uri.scheme != 'https' ||
+        uri.host.isEmpty ||
+        uri.hasQuery ||
+        uri.hasFragment ||
+        uri.userInfo.isNotEmpty) {
+      throw StateError('Set up your bank to check payment IDs.');
+    }
+    final base = url.trim().replaceAll(RegExp(r'/+$'), '');
+    final health = await request('/api/health', url: base);
+    final expected = fingerprint.trim().toLowerCase();
+    final actual = await digest({
+      for (final k in ['sign_key', 'box_key', 'mesh_id']) k: health[k],
+    });
+    if (expected.length != 64 ||
+        actual != expected ||
+        health['fingerprint'] != actual) {
+      throw StateError(
+        'Verify your bank fingerprint before checking payment IDs.',
+      );
+    }
+    return request(
+      '/api/payment-ids?${Uri(queryParameters: {'name': name.trim(), 'id': id.trim()}).query}',
+      url: base,
+    );
   }
 
   Future<void> enroll(
@@ -795,6 +860,8 @@ class BeyondNetEngine extends ChangeNotifier {
           'This phone is no longer advertising nearby. Scan again.',
         );
       }
+      connectedPeer = id;
+      seekingRelay = true;
       working = true;
       try {
         for (var attempt = 0; attempt < 2; attempt++) {
@@ -875,11 +942,6 @@ class BeyondNetEngine extends ChangeNotifier {
     if (!RegExp(r'^[0-9]{6}$').hasMatch(pin)) {
       throw ArgumentError('Enter your six-digit payment PIN.');
     }
-    if (!canPay) {
-      throw StateError(
-        'Connect to the bank or a verified nearby relay before paying.',
-      );
-    }
     if (amount < 1 || amount > 1000000) {
       throw ArgumentError('Enter ₹0.01 to ₹10,000');
     }
@@ -902,11 +964,6 @@ class BeyondNetEngine extends ChangeNotifier {
             biometricOnly: false,
             persistAcrossBackgrounding: true,
           );
-    if (!canPay) {
-      throw StateError(
-        'Connection changed. Reconnect before authorizing a new payment.',
-      );
-    }
     if (!authenticated) {
       throw StateError('Payment authorization was cancelled.');
     }
@@ -939,11 +996,11 @@ class BeyondNetEngine extends ChangeNotifier {
       'name': beneficiary['display_name'] ?? beneficiary['account_id'],
       'packet_id': p['id'],
       'state': 'queued',
-      'transport': 'Saved on this phone',
+      'transport': bankReachable
+          ? 'Sending the original request to the bank'
+          : 'Looking for a nearby phone to carry this request',
     });
-    if (!bankReachable && connectedPeer != null) {
-      await store.chooseRoute(p['id'] as String, connectedPeer!);
-    }
+    seekingRelay = !bankReachable;
     await log('Payment request saved. Waiting for a verified bank decision.');
     await reload();
     notifyListeners();
@@ -964,24 +1021,46 @@ class BeyondNetEngine extends ChangeNotifier {
     receipts = await store.receipts();
     events = await store.events();
     invitations = await store.invitations();
+    connectionRequests = await store.connectionRequests();
     relayQueue = await store.awaitingRoute();
     queueSize = (await store.packets()).length;
   }
 
-  Future<void> decideRelayInvitation(String id, bool allow) async {
-    final packet = await store.decideInvitation(id, allow);
+  Future<void> decideConnectionRequest(String peer, bool allow) async {
+    if (allow && !canPay) {
+      throw StateError('Connect this phone to the bank before accepting.');
+    }
+    await store.decideConnection(peer, allow);
+    try {
+      await background?.clearRequest('connection:$peer');
+    } catch (_) {}
+    await log(
+      allow
+          ? 'Connection approved. Waiting for the sender’s payment.'
+          : 'Connection declined.',
+    );
+    unawaited(tick());
+  }
+
+  Future<void> decideRelayInvitation(
+    String id,
+    bool allow, {
+    String? token,
+  }) async {
+    final packet = await store.decideInvitation(id, allow, token: token);
     if (packet == null) throw StateError('This request has expired.');
     try {
       await background?.clearRequest(id);
     } catch (_) {}
     await log(
       allow
-          ? 'Accepted a nearby payment request. Select the next phone if offline.'
+          ? 'Request saved. Automatically looking for bank access or the next phone.'
           : 'Declined a nearby payment request.',
     );
-    if (allow && bankReachable) {
+    if (allow) {
       _urgentBankWork = true;
       nextBankAttempt = DateTime.now();
+      peerRetry.clear();
       unawaited(tick());
     }
   }
@@ -1082,6 +1161,9 @@ class BeyondNetEngine extends ChangeNotifier {
     await _changeRelay(() async {
       try {
         final status = await background!.ready();
+        if (status['notificationTab'] is int) {
+          notificationTab = status['notificationTab'] as int;
+        }
         relayEnabled = status['enabled'] == true;
         backgroundActive = status['running'] == true;
         final nativeBlocked = status['blocked'] as String?;
@@ -1208,6 +1290,29 @@ class BeyondNetEngine extends ChangeNotifier {
 
   Future<Json> command(Json cmd, Json peer) async {
     switch (cmd['op']) {
+      case 'connection_request':
+        final id = peer['device_id'] as String;
+        if (!canPay) {
+          return {'op': 'connection', 'state': 'offline', 'expiry': nowSeconds};
+        }
+        final fresh = await store.requestConnection(
+          id,
+          (peer['display_name'] ?? peer['account_id'] ?? 'Nearby phone')
+              as String,
+        );
+        final state = await store.connection(id);
+        if (fresh) {
+          await reload();
+          notifyListeners();
+          try {
+            await background?.noticeConnection(id, state!['name'] as String);
+          } catch (_) {}
+        }
+        return {
+          'op': 'connection',
+          'state': state?['state'] ?? 'expired',
+          'expiry': state?['expiry'] ?? nowSeconds,
+        };
       case 'resolve':
         final id = cmd['account_id'];
         if (id is! String || id.length > 100) {
@@ -1235,6 +1340,17 @@ class BeyondNetEngine extends ChangeNotifier {
           }
         }
         return {'op': 'recipient', 'certificate': null};
+      case 'proofs':
+        final offset = cmd['offset'] ?? 0;
+        if (offset is! int || offset < 0 || offset > 1000) {
+          throw StateError('Invalid proof cursor');
+        }
+        final all = await store.proofs();
+        return {
+          'op': 'proofs',
+          'proofs': all.skip(offset).take(1).toList(),
+          'next': offset + 1 < all.length ? offset + 1 : null,
+        };
       case 'inventory':
         final offset = cmd['offset'] ?? 0;
         if (offset is! int || offset < 0 || offset > 1000) {
@@ -1250,7 +1366,9 @@ class BeyondNetEngine extends ChangeNotifier {
           'next': offset + 48 < all.length ? offset + 48 : null,
           'device_id': deviceId,
           'online': bankReachable,
-          'routing': 3,
+          'routing': 4,
+          'connection_approval': false,
+          'route_ready': bankReachable,
           'routes': [
             for (final p in page)
               {'id': p['id'], 'hops': p['hops'], 'kind': p['kind']},
@@ -1263,14 +1381,7 @@ class BeyondNetEngine extends ChangeNotifier {
             !RelayRouting.canForward(p, deviceId, peer['device_id'])) {
           return {'op': 'missing'};
         }
-        if (p['kind'] == 'payment') {
-          final selected = await store.route(p['id'] as String);
-          if ((selected != null ||
-                  await store.requiresRoute(p['id'] as String)) &&
-              selected != peer['device_id']) {
-            return {'op': 'missing'};
-          }
-        }
+        if (p['kind'] == 'payment') return {'op': 'missing'};
         final custodians = await store.recentCustodians(p['id']);
         if (cmd['online'] != true &&
             !(p['kind'] == 'receipt' &&
@@ -1303,7 +1414,15 @@ class BeyondNetEngine extends ChangeNotifier {
         _offeredPackets.remove('${peer['device_id']}:$id');
         return {'op': 'acknowledged', 'id': id};
       case 'put':
+        if (cmd['proof'] is Map) {
+          await receiveDeliveryProof(Map<String, dynamic>.from(cmd['proof']));
+        }
         final p = Map<String, dynamic>.from(cmd['packet']);
+        if (p['kind'] == 'payment') {
+          throw StateError(
+            'Payments require per-request acceptance; update the sending app.',
+          );
+        }
         await accept(p, fromPeer: peer['device_id'] as String);
         return {'op': 'stored', 'id': p['id']};
       case 'offer':
@@ -1313,7 +1432,20 @@ class BeyondNetEngine extends ChangeNotifier {
         if (p['kind'] != 'payment') {
           throw StateError('Only payments need approval');
         }
-        final state = await receiveOffer(p, peer);
+        if (cmd['deadline'] is! int ||
+            cmd['token'] is! String ||
+            (cmd['token'] as String).length != 48 ||
+            cmd['deadline'] <= nowSeconds ||
+            cmd['deadline'] > nowSeconds + 35 ||
+            cmd['deadline'] > p['expires_at']) {
+          throw StateError('Invalid or closed payment offer');
+        }
+        final state = await receiveOffer(
+          p,
+          peer,
+          deadline: cmd['deadline'],
+          token: cmd['token'],
+        );
         return {
           'op': 'offer',
           'id': p['id'],
@@ -1328,11 +1460,28 @@ class BeyondNetEngine extends ChangeNotifier {
     return RelayRouting.forward(p, deviceId);
   }
 
-  Future<String> receiveOffer(Json packet, Json peer) async {
+  Future<String> receiveOffer(
+    Json packet,
+    Json peer, {
+    int? deadline,
+    String? token,
+  }) async {
     final name =
         (peer['display_name'] ?? peer['account_id'] ?? 'Nearby phone')
             as String;
-    final state = await store.invite(packet, peer['device_id'] as String, name);
+    if ((packet['trail'] as List? ?? []).contains(deviceId)) {
+      throw StateError('Payment route loops back to this phone');
+    }
+    if (packet['expires_at'] > nowSeconds + 660) {
+      throw const FormatException('Invalid payment retention');
+    }
+    final state = await store.invite(
+      packet,
+      peer['device_id'] as String,
+      name,
+      deadline: deadline,
+      token: token,
+    );
     if (state == 'new') {
       await reload();
       notifyListeners();
@@ -1367,6 +1516,16 @@ class BeyondNetEngine extends ChangeNotifier {
       if (signed != null) {
         final result = await verify(trust['sign_key'], signed);
         ownedReceipt = result['device_id'] == deviceId;
+      }
+    }
+    if (p['kind'] == 'receipt' && !ownedReceipt && fromPeer != null) {
+      final known = await store.proofs();
+      if (!known.any(
+        (proof) => (proof['body']['receipt_ids'] as List).contains(p['id']),
+      )) {
+        throw const FormatException(
+          'Receipt has no authenticated bank delivery proof',
+        );
       }
     }
     final inserted = await store.putPacket(
@@ -1473,6 +1632,7 @@ class BeyondNetEngine extends ChangeNotifier {
     final remoteRoutes = <String, Json>{};
     int? offset = 0;
     bool peerOnline = false;
+    bool remoteRouteReady = false;
     int remoteRouting = 0;
     while (offset != null) {
       final remote = await rpc({'op': 'inventory', 'offset': offset});
@@ -1484,9 +1644,12 @@ class BeyondNetEngine extends ChangeNotifier {
         throw StateError('Invalid inventory');
       }
       peerOnline = remote['online'] == true;
+      remoteRouteReady = remote['route_ready'] == true;
       remoteRouting = remote['routing'] is int ? remote['routing'] as int : 0;
       remoteIds.addAll((remote['ids'] as List).cast<String>());
-      if (remote['routing'] == 2 || remote['routing'] == 3) {
+      if (remote['routing'] == 2 ||
+          remote['routing'] == 3 ||
+          remote['routing'] == 4) {
         final routes = remote['routes'];
         if (routes is! List || routes.length != remote['ids'].length) {
           throw StateError('Invalid route inventory');
@@ -1496,7 +1659,7 @@ class BeyondNetEngine extends ChangeNotifier {
               !remote['ids'].contains(item['id']) ||
               item['hops'] is! int ||
               item['hops'] < 0 ||
-              item['hops'] > 4 ||
+              item['hops'] > maxRelayHops ||
               !['payment', 'receipt'].contains(item['kind'])) {
             throw StateError('Invalid route summary');
           }
@@ -1523,15 +1686,37 @@ class BeyondNetEngine extends ChangeNotifier {
       'device_id': peerId,
       'name': identity['display_name'] ?? identity['account_id'],
       'online': peerOnline,
+      'route_ready': remoteRouteReady,
       'rssi': radioId == null ? null : radio.discovered[radioId]?.rssi,
       'at': nowSeconds,
     });
+    if (remoteRouting == 4) {
+      int? proofOffset = 0;
+      while (proofOffset != null) {
+        final page = await rpc({'op': 'proofs', 'offset': proofOffset});
+        if (page['op'] != 'proofs' ||
+            page['proofs'] is! List ||
+            page['proofs'].length > 16) {
+          throw StateError('Invalid proof page');
+        }
+        for (final proof in page['proofs']) {
+          await receiveDeliveryProof(Map<String, dynamic>.from(proof));
+        }
+        final next = page['next'];
+        if (next != null &&
+            (next is! int || next <= proofOffset || next > 1000)) {
+          throw StateError('Invalid proof cursor');
+        }
+        proofOffset = next;
+      }
+    }
     final local = await store.packets();
     final localById = {for (final p in local) p['id']: p};
     // A signed inventory also repairs an ACK lost after the peer committed its
     // copy. Always retain our original until a verified bank result is known.
     for (final id in remoteIds.where(localById.containsKey)) {
       final p = localById[id]!;
+      await store.offerResult(id, peerId, 'accepted');
       await store.acknowledge(
         id,
         peerId,
@@ -1559,6 +1744,7 @@ class BeyondNetEngine extends ChangeNotifier {
       for (final id in incoming)
         {'id': id, 'kind': remoteRoutes[id]?['kind'] ?? 'payment'},
     ]).take(8)) {
+      if (item['kind'] == 'payment') continue;
       final id = item['id'] as String;
       final value = await rpc({'op': 'get', 'id': id, 'online': bankReachable});
       if (value['op'] == 'packet') {
@@ -1566,7 +1752,7 @@ class BeyondNetEngine extends ChangeNotifier {
         if (packet['id'] != id) {
           throw StateError('Peer returned a different packet than requested.');
         }
-        final needsApproval = packet['kind'] == 'payment' && remoteRouting == 3;
+        final needsApproval = packet['kind'] == 'payment';
         if (needsApproval) {
           await receiveOffer(packet, identity);
         } else {
@@ -1590,16 +1776,9 @@ class BeyondNetEngine extends ChangeNotifier {
               ))) {
         continue;
       }
-      // A payment only follows the sender's or relay operator's chosen peer.
-      // Receipts remain free to find their recipient along the return path.
-      if (p['kind'] == 'payment') {
-        final selected = await store.route(p['id'] as String);
-        if (selected != null && selected != peerId) {
-          continue;
-        }
-        if (selected == null && await store.requiresRoute(p['id'] as String)) {
-          continue;
-        }
+      if (p['kind'] == 'payment' &&
+          (remoteRouting != 4 || p['uploaded'] == 1)) {
+        continue;
       }
       outgoing.add(p);
     }
@@ -1624,25 +1803,69 @@ class BeyondNetEngine extends ChangeNotifier {
           custodians.length >= RelayRouting.offlineFanout) {
         continue;
       }
+      Json? offer;
+      if (p['kind'] == 'payment') {
+        // Allow a short discovery pass before choosing an offline carrier.
+        final better = nearby.any(
+          (n) =>
+              n['device_id'] != peerId &&
+              n['online'] == true &&
+              n['at'] >= nowSeconds - 30 &&
+              RelayRouting.canForward(p, deviceId, n['device_id']),
+        );
+        if (!peerOnline && better) continue;
+        if (!peerOnline && _radio is BleTransport) {
+          _discoveryStarted.removeWhere((_, at) => at < nowSeconds - 660);
+          final started = _discoveryStarted.putIfAbsent(
+            p['id'],
+            () => nowSeconds,
+          );
+          if (nowSeconds - started < 3) continue;
+        }
+        offer = await store.offerFor(p['id'], peerId, p['expires_at']);
+        if (offer == null) continue;
+        await store.deliveryText(
+          p['id'],
+          'Waiting for a nearby phone to accept',
+        );
+      }
+      final proof = p['kind'] == 'receipt'
+          ? (await store.proofs())
+                .where(
+                  (proof) =>
+                      (proof['body']['receipt_ids'] as List).contains(p['id']),
+                )
+                .firstOrNull
+          : null;
       final response = await rpc({
-        'op': p['kind'] == 'payment' && remoteRouting == 3 ? 'offer' : 'put',
+        'proof': ?proof,
+        'op': p['kind'] == 'payment' ? 'offer' : 'put',
         'packet': forwarded(p),
+        if (offer != null) 'deadline': offer['deadline'],
+        if (offer != null) 'token': offer['token'],
       });
       if (response['op'] == 'offer' && response['id'] == p['id']) {
         if (response['state'] == 'pending') {
           sent++;
           continue;
         }
-        if (response['state'] == 'declined') {
+        if (response['state'] == 'declined' || response['state'] == 'expired') {
+          await store.offerResult(p['id'], peerId, 'declined');
           await store.clearRoute(p['id'] as String);
           await log(
-            'Nearby phone declined the relay request. Choose another phone.',
+            'Nearby offer closed. Automatically looking for another phone.',
           );
           sent++;
           continue;
         }
         if (response['state'] == 'accepted') {
+          await store.offerResult(p['id'], peerId, 'accepted');
           // The peer already committed the packet; treat this as a storage ACK.
+          for (final intent in payments.where(
+            (x) => x['packet_id'] == p['id'],
+          )) {
+            await store.markRelayed(intent['payment_id']);
+          }
           await store.acknowledge(
             p['id'],
             peerId,
@@ -1666,6 +1889,45 @@ class BeyondNetEngine extends ChangeNotifier {
         await store.markRelayed(localPayment['payment_id']);
       }
     }
+  }
+
+  Future<void> receiveDeliveryProof(Json proof) async {
+    final b = await verify(trust['sign_key'], proof);
+    if (b['v'] != 1 ||
+        b['type'] != 'delivery_proof' ||
+        b['mesh_id'] != trust['mesh_id'] ||
+        b['packet_id'] is! String ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(b['packet_id']) ||
+        b['receipt_ids'] is! List ||
+        b['receipt_ids'].isEmpty ||
+        b['receipt_ids'].length > 100 ||
+        b['receipt_ids'].any(
+          (id) => id is! String || !RegExp(r'^[a-f0-9]{64}$').hasMatch(id),
+        ) ||
+        b['recorded_at'] is! int ||
+        b['recorded_at'] > nowSeconds + 60 ||
+        b['expires_at'] is! int ||
+        b['expires_at'] <= nowSeconds ||
+        b['expires_at'] > b['recorded_at'] + 7 * 86400) {
+      throw const FormatException('Invalid bank delivery proof');
+    }
+    await store.saveProof(proof);
+    await store.deliveryText(
+      b['packet_id'],
+      'Bank recorded a result. Waiting for your private receipt.',
+    );
+  }
+
+  Future<void> _receiveSubmission(Json result, String expectedPacket) async {
+    if (result['delivery_proof'] is! Map) {
+      throw StateError('Bank update required for payment delivery proofs');
+    }
+    final proof = Map<String, dynamic>.from(result['delivery_proof']);
+    if (proof['body']?['packet_id'] != expectedPacket) {
+      throw const FormatException('Bank proof is for another request');
+    }
+    await receiveDeliveryProof(proof);
+    await _receiveBankReceipts(result['receipts']);
   }
 
   Future<void> _receiveBankReceipts(Object? values) async {
@@ -1733,8 +1995,13 @@ class BeyondNetEngine extends ChangeNotifier {
         try {
           final result = await submitPacket(clean);
           // Persist every receipt before marking this submission complete.
-          await _receiveBankReceipts(result['receipts']);
+          await _receiveSubmission(result, p['id']);
           await store.uploaded(p['id']);
+          if (!ownIds.contains(p['id'])) {
+            try {
+              await background?.noticeSubmitted(p['id'] as String);
+            } catch (_) {}
+          }
           await log(
             'Bank returned signed receipts for packet ${p['id'].toString().substring(0, 8)}.',
           );
@@ -1788,7 +2055,7 @@ class BeyondNetEngine extends ChangeNotifier {
           // local cancellation to release reserved funds.
           final original = Map<String, dynamic>.from(p)..remove('uploaded');
           final result = await submitPacket(original);
-          await _receiveBankReceipts(result['receipts']);
+          await _receiveSubmission(result, p['id']);
           await store.uploaded(p['id']);
         }
       }
@@ -1828,7 +2095,7 @@ class BeyondNetEngine extends ChangeNotifier {
         await gatewayTick();
       }
       if (relay && radio.running) {
-        final selectedRoutes = <String>{};
+        final selectedRoutes = <String>{?connectedPeer};
         for (final packet in await store.packets()) {
           if (packet['kind'] == 'payment') {
             final selected = await store.route(packet['id'] as String);
@@ -1904,7 +2171,7 @@ class BeyondNetEngine extends ChangeNotifier {
       if (backgroundActive) {
         await background?.update(
           relayBlocked ??
-              '$queueSize encrypted packets · ${bankReachable ? "Bank reachable" : "Offline forwarding"}',
+              'Nearby delivery active · ${bankReachable ? "Bank reachable" : "Looking for bank access"}',
         );
       }
       final advertising = radio.discovered.entries

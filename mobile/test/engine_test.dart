@@ -89,8 +89,12 @@ void main() {
       sender.profile!['trust']['box_key'] = fixture['box_public'];
       sender.bankReachable = false;
       sender.connectedPeer = relay.deviceId;
+      sender.connectionStates[relay.deviceId] = {
+        'state': 'accepted',
+        'expiry': nowSeconds + 600,
+      };
       sender.nearby = [
-        {'device_id': relay.deviceId, 'at': nowSeconds},
+        {'device_id': relay.deviceId, 'at': nowSeconds, 'online': true},
       ];
       final id = await sender.pay(relay.certificate, 1000, pin: '123456');
       while (sender.working) {
@@ -137,8 +141,12 @@ void main() {
     e.profile!['account']['balance'] = balance;
     e.profile!['trust']['box_key'] = fixture['box_public'];
     e.connectedPeer = relay.deviceId;
+    e.connectionStates[relay.deviceId] = {
+      'state': 'accepted',
+      'expiry': nowSeconds + 600,
+    };
     e.nearby = [
-      {'device_id': relay.deviceId, 'at': nowSeconds},
+      {'device_id': relay.deviceId, 'at': nowSeconds, 'online': true},
     ];
     e.bankReachable = false;
   }
@@ -357,27 +365,32 @@ void main() {
         randomCapability(),
         nowSeconds + 600,
       );
-      final wire = await sender.signedRpc({
-        'op': 'put',
+      final cmd = {
+        'op': 'offer',
         'packet': p,
-      }, 'rpc-one');
+        'deadline': nowSeconds + 30,
+        'token': randomCapability(),
+      };
+      final wire = await sender.signedRpc(cmd, 'rpc-one');
       final response = await relay.handleRpc(wire);
       final checked = await sender.validateRpc(
         response,
         expectedRequest: 'rpc-one',
       );
-      expect(checked['command'], {'op': 'stored', 'id': p['id']});
+      expect(checked['command']['state'], 'pending');
+      expect(await relay.store.packet(p['id']), isNull);
+      await relay.store.decideInvitation(p['id'], true);
       expect((await relay.store.packet(p['id']))!['box'], p['box']);
       await expectLater(relay.handleRpc(wire), throwsStateError);
       final again = await relay.handleRpc(
-        await sender.signedRpc({'op': 'put', 'packet': p}, 'rpc-two'),
+        await sender.signedRpc(cmd, 'rpc-two'),
       );
       expect(
         (await sender.validateRpc(
           again,
           expectedRequest: 'rpc-two',
-        ))['command']['op'],
-        'stored',
+        ))['command']['state'],
+        'accepted',
       );
       expect((await relay.store.packets()).length, 1);
     },
@@ -573,20 +586,17 @@ void main() {
   );
 
   test(
-    'Offline payments require a recent connected peer; online needs no relay',
+    'Offline authorization needs enrollment and PIN setup, not a bank route',
     () async {
+      sender.profile!['account']['pin_configured'] = true;
       sender.bankReachable = false;
-      sender.connectedPeer = 'peer';
-      sender.nearby = [
-        {'device_id': 'peer', 'at': nowSeconds - 100},
-      ];
-      expect(sender.canPay, isFalse);
-      sender.nearby.first['at'] = nowSeconds;
-      expect(sender.canPay, isTrue);
       sender.relay = false;
-      expect(sender.canPay, isFalse);
+      sender.nearby.clear();
+      expect(sender.canPay, isTrue);
       sender.bankReachable = true;
       expect(sender.canPay, isTrue);
+      sender.profile!['account']['pin_configured'] = false;
+      expect(sender.canPay, isFalse);
     },
   );
 

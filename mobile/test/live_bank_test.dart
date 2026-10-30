@@ -233,12 +233,6 @@ void main() {
         await pause(gateway);
         final secondGateway = await create('mesh-gateway-two', 'customer');
         await pause(secondGateway);
-        sender.connectedPeer = intermediate.deviceId;
-        sender.nearby = [
-          {'device_id': intermediate.deviceId, 'at': nowSeconds},
-        ];
-        final third = await sender.pay(cert, 50, pin: '123456');
-        await eventually(() => !sender.working);
         Future<void> edge(BeyondNetEngine a, BeyondNetEngine b) async {
           Json? identity;
           await a.syncPackets((command) async {
@@ -250,57 +244,88 @@ void main() {
           }, () => identity!);
         }
 
-        await edge(sender, intermediate);
+        // Payment-first: authorize with no internet, no discovered peer and
+        // no pre-approved route. Exercise FIVE phones with controlled edges.
+        final relayTwo = await create('offline-relay-two', 'customer');
+        await pause(relayTwo);
+        final relayThree = await create('offline-relay-three', 'customer');
+        await pause(relayThree);
+        final third = await sender.pay(cert, 50, pin: '123456');
+        await eventually(() => !sender.working);
         final packetId =
             sender.payments.firstWhere(
                   (p) => p['payment_id'] == third,
                 )['packet_id']
                 as String;
-        expect(await intermediate.store.packet(packetId), isNull);
-        expect(
-          intermediate.invitations.singleWhere(
-            (invite) => invite['id'] == packetId,
-          )['source'],
+        for (final pair in [
+          [sender, intermediate],
+          [intermediate, relayTwo],
+          [relayTwo, relayThree],
+          [relayThree, gateway],
+        ]) {
+          final a = pair[0], b = pair[1];
+          await edge(a, b);
+          expect(
+            await b.store.packet(packetId),
+            isNull,
+            reason: 'No custody before consent',
+          );
+          b.working = true; // controlled topology, no real radio scheduler
+          try {
+            await b.decideRelayInvitation(packetId, true);
+          } finally {
+            b.working = false;
+          }
+          await edge(a, b); // durable acknowledgment and no duplicate prompt
+          expect(b.invitations, isEmpty);
+        }
+        final forwarded = (await gateway.store.packet(packetId))!;
+        expect(forwarded['hops'], 4);
+        expect(forwarded['path'], [
           sender.deviceId,
-        );
-        await intermediate.decideRelayInvitation(packetId, true);
-        final packet = (await intermediate.store.packet(packetId))!;
-        expect(await gateway.store.packet(packet['id']), isNull);
-        await intermediate.store.chooseRoute(packetId, gateway.deviceId);
-        await edge(intermediate, gateway);
-        expect(await gateway.store.packet(packetId), isNull);
-        await gateway.decideRelayInvitation(packetId, true);
-        await intermediate.store.chooseRoute(packetId, secondGateway.deviceId);
-        await edge(intermediate, secondGateway);
-        await secondGateway.decideRelayInvitation(packetId, true);
-        final forwarded = (await gateway.store.packet(packet['id']))!;
-        expect(forwarded['hops'], 2);
+          intermediate.deviceId,
+          relayTwo.deviceId,
+          relayThree.deviceId,
+        ]);
+        // A second authenticated gateway receives the identical instruction;
+        // concurrent submissions still produce one debit and the same receipt.
+        await secondGateway.receiveOffer(forwarded, {
+          'device_id': relayThree.deviceId,
+          'display_name': 'Relay',
+        });
+        await secondGateway.store.decideInvitation(packetId, true);
         gateway.bankReachable = true;
         secondGateway.bankReachable = true;
-        // Competing online gateways send the SAME signed request concurrently.
         final results = await Future.wait([
           gateway.submitPacket(forwarded),
           secondGateway.submitPacket(forwarded),
         ]);
         expect(results.first['receipts'], results.last['receipts']);
-        // The sender is still offline. When it reconnects, fetch the bank's
-        // device-targeted queued receipt directly, without a reverse mesh edge.
-        expect(
-          sender.payments.firstWhere((p) => p['payment_id'] == third)['state'],
-          isNot('paid'),
+        final proof = Map<String, dynamic>.from(
+          results.first['delivery_proof'],
         );
-        await sender.store.uploaded(packetId);
-        sender.bankReachable = true;
-        sender.nextBankAttempt = DateTime.fromMillisecondsSinceEpoch(0);
-        await sender.gatewayTick();
+        await gateway.receiveDeliveryProof(proof);
+        for (final raw in results.first['receipts']) {
+          await gateway.accept(Map<String, dynamic>.from(raw));
+        }
+        // Return through the entire chain while the payer stays offline.
+        for (final pair in [
+          [relayThree, gateway],
+          [relayTwo, relayThree],
+          [intermediate, relayTwo],
+          [sender, intermediate],
+        ]) {
+          await edge(pair[0], pair[1]);
+        }
         await sender.reload();
         expect(
           sender.payments.firstWhere((p) => p['payment_id'] == third)['state'],
           'paid',
         );
-        expect(sender.account!['balance'], 87505); // only one debit
-        expect(sender.bankReachable, isTrue);
+        expect(sender.account!['balance'], 87505);
+        expect(sender.bankReachable, isFalse);
         expect(intermediate.bankReachable, isFalse);
+        expect((await intermediate.store.proofs()).isNotEmpty, isTrue);
 
         // An expired unresolved request keeps funds reserved offline. On
         // reconnection, the ORIGINAL ciphertext gets a signed bank decision,

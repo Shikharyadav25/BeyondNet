@@ -1,5 +1,6 @@
 """Test-only Spring Boot subprocess and temporary ledger; never user data."""
 import json
+import shutil
 import signal
 import os
 from pathlib import Path
@@ -24,7 +25,9 @@ with tempfile.TemporaryDirectory(prefix='beyondnet-java-test-') as directory:
         listener.bind(('127.0.0.1', 0))
         port = listener.getsockname()[1]
     env = {**environment(), 'KARO_DATA_DIR': directory, 'PORT': str(port)}
-    process = subprocess.Popen(['java', '-jar', str(jar), '--server.port=' + str(port)], cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    test_jar = Path(directory) / 'test-bank.jar'
+    shutil.copyfile(jar, test_jar)
+    process = subprocess.Popen(['java', '-jar', str(test_jar), '--server.port=' + str(port)], cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         for _ in range(300):
             if process.poll() is not None:

@@ -99,7 +99,8 @@ void main() {
     },
   );
   test('Hop overflow is rejected', () async {
-    final p = Map<String, dynamic>.from(fixture['packet'])..['hops'] = 5;
+    final p = Map<String, dynamic>.from(fixture['packet'])
+      ..['hops'] = maxRelayHops + 1;
     await expectLater(checkPacket(p), throwsFormatException);
   });
 }

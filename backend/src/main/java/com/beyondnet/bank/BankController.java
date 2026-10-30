@@ -34,6 +34,12 @@ public class BankController {
     return bank.login(b);
   }
 
+  @GetMapping("/api/payment-ids")
+  public Object paymentIds(@RequestParam(defaultValue = "") String name,
+      @RequestParam(defaultValue = "") String id) {
+    return bank.paymentIds(name, id);
+  }
+
   @PostMapping("/api/signup")
   public Object signup(@RequestBody Map<String, Object> b) {
     return bank.signup(b);
