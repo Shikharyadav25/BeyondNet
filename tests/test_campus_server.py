@@ -24,7 +24,7 @@ def campus_server(tmp_path):
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
         port = sock.getsockname()[1]
-    runtime = {**environment(), 'KARO_DATA_DIR': str(tmp_path)}
+    runtime = {**environment(), 'KARO_DATA_DIR': str(tmp_path), 'CAMPUS_PUBLIC_URL': 'https://campus.example'}
     with (tmp_path / 'startup.log').open('w') as output:
         process = subprocess.Popen(['java', '-jar', str(ROOT / 'backend/target/bank-1.3.3.jar'),
                                     '--spring.profiles.active=campus', f'--server.port={port}'],

@@ -1308,10 +1308,6 @@ class BeyondNetEngine extends ChangeNotifier {
         }
         relayEnabled = status['enabled'] == true;
         backgroundActive = status['running'] == true;
-        final transport = _radio;
-        if (transport is BleTransport && status['screenInteractive'] is bool) {
-          transport.setScreenInteractive(status['screenInteractive'] as bool);
-        }
         final nativeBlocked = status['blocked'] as String?;
         // A failed restore stays paused instead of repeatedly locking the
         // switch on every timer tick. Explicit retry or an adapter/permission
@@ -1322,6 +1318,10 @@ class BeyondNetEngine extends ChangeNotifier {
             backgroundActive &&
             relayBlocked == null &&
             profile != null) {
+          final transport = radio;
+          if (transport is BleTransport && status['screenInteractive'] is bool) {
+            transport.setScreenInteractive(status['screenInteractive'] as bool);
+          }
           if (!relay || !radio.running) await _startRadio();
         } else if (relay && _radio != null) {
           relay = false;
@@ -1353,6 +1353,10 @@ class BeyondNetEngine extends ChangeNotifier {
         _relayStartFailure = null;
         connectedPeer = null;
         nearby.clear();
+        identityByRadio.clear();
+        peerRetry.clear();
+        peerFailures.clear();
+        _awaitingPeer.clear();
         await _radio?.stop();
       }
     });
@@ -1431,6 +1435,10 @@ class BeyondNetEngine extends ChangeNotifier {
     final peer = Map<String, dynamic>.from(checked['peer']);
     await store.claimRpc(peer['device_id'], rid, checked['at']);
     final response = await command(cmd, peer);
+    if (cmd['op'] == 'inventory' && (cmd['offset'] ?? 0) == 0) {
+      final online = cmd['online'];
+      _rememberPeer(peer, online: online is bool ? online : null);
+    }
     return signedRpc(response, rid);
   }
 
@@ -1534,9 +1542,6 @@ class BeyondNetEngine extends ChangeNotifier {
         final offset = cmd['offset'] ?? 0;
         if (offset is! int || offset < 0 || offset > 1000) {
           throw StateError('Invalid inventory cursor');
-        }
-        if (offset == 0) {
-          _rememberPeer(peer, online: cmd['online'] as bool?);
         }
         final all = (await store.packets())
           ..sort((a, b) => (a['id'] as String).compareTo(b['id'] as String));
@@ -2123,7 +2128,7 @@ class BeyondNetEngine extends ChangeNotifier {
           continue;
         }
         if (response['state'] == 'declined' || response['state'] == 'expired') {
-          await store.offerResult(p['id'], peerId, 'declined');
+          await store.offerResult(p['id'], peerId, response['state'] as String);
           await store.clearRoute(p['id'] as String);
           await log(
             'Nearby offer closed. Automatically looking for another phone.',
@@ -2164,7 +2169,7 @@ class BeyondNetEngine extends ChangeNotifier {
     }
   }
 
-  Future<void> receiveDeliveryProof(Json proof) async {
+  Future<Json> _verifiedProofBody(Json proof) async {
     final b = await verify(trust['sign_key'], proof);
     if (b['v'] != 1 ||
         b['type'] != 'delivery_proof' ||
@@ -2184,9 +2189,18 @@ class BeyondNetEngine extends ChangeNotifier {
         b['expires_at'] > b['recorded_at'] + 7 * 86400) {
       throw const FormatException('Invalid bank delivery proof');
     }
+    return b;
+  }
+
+  Future<void> receiveDeliveryProof(Json proof) async {
+    final body = await _verifiedProofBody(proof);
+    await _saveVerifiedProof(proof, body);
+  }
+
+  Future<void> _saveVerifiedProof(Json proof, Json body) async {
     await store.saveProof(proof);
     await store.deliveryText(
-      b['packet_id'],
+      body['packet_id'],
       'Bank recorded a result. Waiting for your private receipt.',
     );
   }
@@ -2196,11 +2210,26 @@ class BeyondNetEngine extends ChangeNotifier {
       throw StateError('Bank update required for payment delivery proofs');
     }
     final proof = Map<String, dynamic>.from(result['delivery_proof']);
-    if (proof['body']?['packet_id'] != expectedPacket) {
+    final body = await _verifiedProofBody(proof);
+    if (body['packet_id'] != expectedPacket) {
       throw const FormatException('Bank proof is for another request');
     }
-    await receiveDeliveryProof(proof);
-    await _receiveBankReceipts(result['receipts']);
+    final expected = (body['receipt_ids'] as List).toSet();
+    final batch = result['receipts'];
+    if (batch is! List || batch.length != expected.length) {
+      throw const FormatException('Incomplete bank receipt response');
+    }
+    for (final value in batch) {
+      if (value is! Map ||
+          value['kind'] != 'receipt' ||
+          !expected.remove(value['id'])) {
+        throw const FormatException('Receipt differs from the signed bank response');
+      }
+      await accept(Map<String, dynamic>.from(value));
+    }
+    // Saving the proof marks this packet uploaded. An interrupted receipt
+    // batch must leave the original eligible for idempotent resubmission.
+    await _saveVerifiedProof(proof, body);
   }
 
   Future<void> _receiveBankReceipts(Object? values) async {

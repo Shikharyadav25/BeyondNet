@@ -403,7 +403,7 @@ class BleTransport implements PeerTransport {
     String id,
   ) async {
     var acknowledged = false;
-    var ownsCommand = false;
+    IndexedBleSession? commandSession;
     try {
       if (e.request.offset != 0 || e.request.value.isEmpty) {
         throw const FormatException('Invalid BLE write');
@@ -431,7 +431,7 @@ class BleTransport implements PeerTransport {
       }
       final message = session.assembly.add(frame);
       if (message != null) {
-        ownsCommand = true;
+        commandSession = session;
         processing.add('indexed:$id');
       }
       await peripheral.respondWriteRequest(e.request);
@@ -465,7 +465,10 @@ class BleTransport implements PeerTransport {
       if (!acknowledged) {
         // The final frame arrived but its write was never acknowledged. A
         // reconnect must be able to start the same command from frame zero.
-        if (ownsCommand) indexed.remove(id);
+        if (commandSession != null && identical(indexed[id], commandSession)) {
+          indexed.remove(id);
+          processing.remove('indexed:$id');
+        }
         try {
           await peripheral.respondWriteRequestWithError(
             e.request,
@@ -475,7 +478,9 @@ class BleTransport implements PeerTransport {
       }
       onEvent('Bluetooth exchange interrupted; saved packets will retry.');
     } finally {
-      if (ownsCommand) processing.remove('indexed:$id');
+      if (commandSession != null && identical(indexed[id], commandSession)) {
+        processing.remove('indexed:$id');
+      }
     }
   }
 

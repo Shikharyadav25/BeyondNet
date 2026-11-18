@@ -188,7 +188,7 @@ class LocalStore {
     // copy for at least 60 seconds before trying a different downstream carrier.
     if (attempts.any(
       (r) =>
-          r['state'] != 'declined' &&
+          (r['state'] == 'pending' || r['state'] == 'accepted') &&
           (r['state'] == 'pending'
               ? (r['deadline'] as int) > nowSeconds
               : (r['at'] as int) > nowSeconds - 60),
@@ -198,8 +198,8 @@ class LocalStore {
     // Revisit the same timed-out pending carrier without growing the copy
     // budget. A new offer generation cannot revive an old notification action.
     if (same != null && same['state'] == 'accepted') return null;
-    if (same == null &&
-        attempts.where((r) => r['state'] != 'declined').length >= 2) {
+    if ((same == null || same['state'] == 'expired') &&
+        attempts.where((r) => r['state'] == 'pending' || r['state'] == 'accepted').length >= 2) {
       return null;
     }
     if (attempts.length >= 32 && same == null) return null;

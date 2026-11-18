@@ -446,7 +446,7 @@ void main() {
         'recorded_at': nowSeconds,
         'expires_at': nowSeconds + 7 * 86400,
       });
-      var duplicateRecovered = false;
+      var submissions = 0;
       final e = BeyondNetEngine(
         client: MockClient((req) async {
           if (req.url.path == '/api/health') {
@@ -456,12 +456,12 @@ void main() {
             );
           }
           if (req.url.path == '/api/packets') {
-            duplicateRecovered = true;
+            submissions++;
             return http.Response(
               jsonEncode({
                 'duplicate': true,
                 'delivery_proof': proof,
-                'receipts': [refreshed],
+                'receipts': submissions == 1 ? [] : [refreshed],
               }),
               200,
             );
@@ -495,7 +495,14 @@ void main() {
         e.bankReachable = true;
         await e.gatewayTick();
         await e.reload();
-        expect(duplicateRecovered, isTrue);
+        expect(submissions, 1);
+        expect(await e.store.proofs(), isEmpty);
+        expect(e.payments.single['state'], 'queued');
+        expect(e.availableBalance, 8900);
+        e.nextBankAttempt = DateTime.now();
+        await e.gatewayTick();
+        await e.reload();
+        expect(submissions, 2);
         expect(e.payments.single['state'], 'paid');
         expect(e.bankReachable, isTrue);
         expect(e.availableBalance, 9000);
