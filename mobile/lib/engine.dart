@@ -8,10 +8,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:http/http.dart' as http;
-import 'package:local_auth/local_auth.dart';
 import 'package:uuid/uuid.dart';
 
 import 'protocol.dart';
+import 'bank_connection_policy.dart';
+import 'payment_auth.dart';
 import 'store.dart';
 import 'ble_transport.dart';
 import 'relay_routing.dart';
@@ -50,12 +51,28 @@ class BeyondNetEngine extends ChangeNotifier {
        _radio = transport,
        background =
            backgroundRelay ?? (Platform.isAndroid ? BackgroundRelay() : null);
-  final LocalAuthentication auth = LocalAuthentication();
+  final PaymentAuth auth = PaymentAuth();
   late SimpleKeyPair signing, encryption;
   PeerTransport? _radio;
-  PeerTransport get radio => _radio ??= BleTransport(handleRpc, (s) {
-    unawaited(log(s));
-  });
+  PeerTransport get radio => _radio ??= BleTransport(
+    handleRpc,
+    (s) => unawaited(log(s)),
+    onPeerDiscovered: () {
+      if (!relay || _disposed) return;
+      notifyListeners();
+      unawaited(tick());
+    },
+  );
+  int get unverifiedPeerCount =>
+      _radio?.discovered.entries
+          .where(
+            (entry) =>
+                DateTime.now().difference(entry.value.seen) <
+                    const Duration(seconds: 25) &&
+                !identityByRadio.containsKey(entry.key),
+          )
+          .length ??
+      0;
   Json? profile;
   Json? get account => profile?['account'] == null
       ? null
@@ -108,6 +125,71 @@ class BeyondNetEngine extends ChangeNotifier {
   String network = 'Checking connection…';
   bool? internet;
   bool bankReachable = false, checkingConnection = false;
+  bool connectionUnstable = false;
+  String? bankAttention;
+  int _connectionFailures = 0;
+  bool _bankWorkDelayed = false;
+  DateTime _nextHealthAttempt = DateTime.fromMillisecondsSinceEpoch(0);
+  Json? _cachedHealth;
+  Future<Json>? _healthRequest;
+  bool _temporaryBankError(Object error) =>
+      BankConnectionPolicy.transportError(error) ||
+      error is http.ClientException ||
+      (error is BankFailure &&
+          (error.status == 200 ||
+              error.status == 408 ||
+              error.status == 429 ||
+              error.status >= 500));
+  void _connectionProblem(Object error) {
+    bankReachable = false;
+    if (_temporaryBankError(error)) {
+      _connectionFailures++;
+      connectionUnstable = internet != false;
+      bankAttention = null;
+      network = internet == false
+          ? 'Internet is off · saved payments will retry'
+          : _connectionFailures < 3
+          ? 'Connection unstable · saved payments will retry'
+          : 'Waiting for bank connection · payment outcomes remain pending';
+    } else {
+      connectionUnstable = false;
+      _cachedHealth = null;
+      bankAttention = error is BankFailure && [401, 403].contains(error.status)
+          ? 'Sign in again to renew bank access'
+          : error.toString().replaceFirst('Bad state: ', '');
+      network = bankAttention!;
+      closeLive();
+    }
+  }
+
+  Future<Json> _verifiedHealth({bool force = false}) async {
+    if (_healthRequest != null) return _healthRequest!;
+    if (!force &&
+        _cachedHealth != null &&
+        _cachedHealth!['fingerprint'] == trust['fingerprint'] &&
+        DateTime.now().difference(_lastHealthCheck) <
+            BankConnectionPolicy.healthFreshness) {
+      return _cachedHealth!;
+    }
+    final pending = () async {
+      final health = await request('/api/health');
+      if (health['fingerprint'] != trust['fingerprint']) {
+        throw StateError(
+          'Bank identity changed. Verify the bank fingerprint before continuing.',
+        );
+      }
+      _lastHealthCheck = DateTime.now();
+      _cachedHealth = health;
+      return health;
+    }();
+    _healthRequest = pending;
+    try {
+      return await pending;
+    } finally {
+      if (identical(_healthRequest, pending)) _healthRequest = null;
+    }
+  }
+
   bool get isMerchant => account?['role'] == 'merchant';
   bool get pinConfigured => account?['pin_configured'] == true;
   int get availableBalance => _availableBalance(payments);
@@ -145,13 +227,13 @@ class BeyondNetEngine extends ChangeNotifier {
     // Online uses a fresh authoritative snapshot. Offline uses the last bank
     // snapshot less unresolved local intents; expiry alone never releases them.
     if (bankReachable &&
-        DateTime.now().difference(_lastProfileRefresh).inSeconds >= 5) {
+        !connectionUnstable &&
+        DateTime.now().difference(_lastProfileRefresh).inSeconds >= 30) {
       try {
         await refreshProfile();
-      } on SocketException {
-        bankReachable = false;
-      } on TimeoutException {
-        bankReachable = false;
+      } catch (error) {
+        if (!_temporaryBankError(error)) rethrow;
+        _connectionProblem(error);
       }
     }
     await _ensurePaymentFunds(amount);
@@ -172,6 +254,7 @@ class BeyondNetEngine extends ChangeNotifier {
   DateTime _lastProfileRefresh = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _lastHealthCheck = DateTime.fromMillisecondsSinceEpoch(0);
   bool _urgentBankWork = false;
+  Future<void>? _gatewayWork;
   int _inboxCursor = 0;
   Timer? connectionTimer;
   static const platform = MethodChannel('beyondnet/network');
@@ -184,8 +267,10 @@ class BeyondNetEngine extends ChangeNotifier {
   final Map<String, String> identityByRadio = {};
   final Map<String, int> _offeredPackets = {};
   final Map<String, int> _discoveryStarted = {};
+  final Set<String> _awaitingPeer = {};
   final Random _jitter = Random();
   int _peerRound = 0;
+  int _proofRound = 0;
   Future<void> init({String? databasePath}) async {
     await store.init(databasePath: databasePath);
     final saved = await secure.read(key: 'profile');
@@ -252,7 +337,7 @@ class BeyondNetEngine extends ChangeNotifier {
                     headers: headers,
                     body: jsonEncode(body),
                   ))
-            .timeout(const Duration(seconds: 12));
+            .timeout(BankConnectionPolicy.timeout(path));
     Json data;
     try {
       data = Map<String, dynamic>.from(jsonDecode(response.body));
@@ -521,7 +606,7 @@ class BeyondNetEngine extends ChangeNotifier {
 
   void startMonitoring() {
     connectionTimer ??= Timer.periodic(const Duration(seconds: 5), (_) {
-      unawaited(checkConnection());
+      unawaited(_checkConnection(force: false));
     });
     timer ??= Timer.periodic(const Duration(seconds: 5), (_) {
       unawaited(tick());
@@ -529,8 +614,15 @@ class BeyondNetEngine extends ChangeNotifier {
     unawaited(checkConnection());
   }
 
-  Future<void> checkConnection() async {
-    if (profile == null || checkingConnection || _disposed) return;
+  Future<void> checkConnection() => _checkConnection(force: true);
+
+  Future<void> _checkConnection({required bool force}) async {
+    if (profile == null ||
+        checkingConnection ||
+        _disposed ||
+        (!force && DateTime.now().isBefore(_nextHealthAttempt))) {
+      return;
+    }
     checkingConnection = true;
     notifyListeners();
     final wasReachable = bankReachable;
@@ -554,8 +646,7 @@ class BeyondNetEngine extends ChangeNotifier {
         unawaited(tick());
         return;
       }
-      final health = await request('/api/health');
-      _lastHealthCheck = DateTime.now();
+      final health = await _verifiedHealth(force: force);
       if (health['fingerprint'] != trust['fingerprint']) {
         throw StateError(
           'Bank identity changed. Verify the bank fingerprint before continuing.',
@@ -563,14 +654,26 @@ class BeyondNetEngine extends ChangeNotifier {
       }
       internet = true;
       bankReachable = health['online'] == true;
-      if (bankReachable && !wasReachable) {
+      if (bankReachable &&
+          !wasReachable &&
+          !DateTime.now().isBefore(nextBankAttempt)) {
         nextBankAttempt = DateTime.now();
         _urgentBankWork = true;
       }
-      network = bankReachable ? 'Connected to bank' : 'Bank is paused';
+      connectionUnstable = _bankWorkDelayed;
+      bankAttention = null;
+      _connectionFailures = 0;
+      _nextHealthAttempt = DateTime.now().add(
+        BankConnectionPolicy.healthFreshness,
+      );
+      network = bankReachable
+          ? (_bankWorkDelayed
+                ? 'Connection unstable · saved payments will retry'
+                : 'Connected to bank')
+          : 'Bank is paused';
       if (!_disposed) notifyListeners();
       if (bankReachable) {
-        await openLive();
+        unawaited(openLive());
         if (DateTime.now().difference(_lastProfileRefresh).inMinutes >= 5) {
           try {
             await refreshProfile();
@@ -584,14 +687,10 @@ class BeyondNetEngine extends ChangeNotifier {
         unawaited(tick());
       }
     } catch (error) {
-      bankReachable = false;
-      network = internet == false
-          ? 'Internet is off'
-          : error is BankFailure && error.status == 401
-          ? 'Sign in again to renew access'
-          : 'Bank unavailable · nearby payments available';
-      if (error is StateError) network = error.message.toString();
-      closeLive();
+      _connectionProblem(error);
+      _nextHealthAttempt = DateTime.now().add(
+        BankConnectionPolicy.retry(_connectionFailures),
+      );
     } finally {
       checkingConnection = false;
       if (!_disposed) notifyListeners();
@@ -607,15 +706,26 @@ class BeyondNetEngine extends ChangeNotifier {
     _openingSocket = true;
     try {
       final uri = Uri.parse('$bankUrl/api/live').replace(scheme: 'wss');
-      final socket = await (socketConnector ?? WebSocket.connect)(
-        uri.toString(),
-      ).timeout(const Duration(seconds: 8));
+      bool expired = false;
+      final opening = (socketConnector ?? WebSocket.connect)(uri.toString());
+      unawaited(
+        opening.then((socket) async {
+          if (expired || _disposed) await socket.close();
+        }, onError: (Object _) {}),
+      );
+      final socket = await opening.timeout(
+        BankConnectionPolicy.socketConnect,
+        onTimeout: () {
+          expired = true;
+          throw TimeoutException('Bank live connection is slow');
+        },
+      );
       if (_disposed) {
         await socket.close();
         return;
       }
       _socket = socket;
-      socket.pingInterval = const Duration(seconds: 15);
+      socket.pingInterval = BankConnectionPolicy.heartbeat;
       socket.add(
         jsonEncode({
           'token': profile!['token'],
@@ -642,6 +752,13 @@ class BeyondNetEngine extends ChangeNotifier {
               throw StateError('Live bank identity mismatch');
             }
             _liveReady = true;
+            break;
+          case 'connection_status':
+            if (!_liveReady) throw StateError('Live session not verified');
+            connectionUnstable = data['status'] == 'delayed';
+            network = connectionUnstable
+                ? 'Bank updates delayed · saved payments will retry'
+                : 'Connected to bank';
             break;
           case 'account':
             if (!_liveReady) throw StateError('Live session not verified');
@@ -699,7 +816,9 @@ class BeyondNetEngine extends ChangeNotifier {
         _socket!.add(
           jsonEncode({'type': 'submit', 'id': id, 'packet': packet}),
         );
-        return await completion.future.timeout(const Duration(seconds: 12));
+        return await completion.future.timeout(
+          BankConnectionPolicy.liveSubmitFallback,
+        );
       } on BankFailure {
         rethrow;
       } catch (_) {
@@ -762,15 +881,22 @@ class BeyondNetEngine extends ChangeNotifier {
   Future<Json> findRecipient(String id) async {
     final target = id.trim().toLowerCase();
     if (bankReachable) {
-      final result = await request(
-        '/api/recipients/${Uri.encodeComponent(target)}',
-      );
-      final cert = Map<String, dynamic>.from(result['certificate']);
-      if (cert['body']['account_id'] != target) {
-        throw StateError('Recipient ID does not match the requested account.');
+      try {
+        final result = await request(
+          '/api/recipients/${Uri.encodeComponent(target)}',
+        );
+        final cert = Map<String, dynamic>.from(result['certificate']);
+        if (cert['body']['account_id'] != target) {
+          throw StateError(
+            'Recipient ID does not match the requested account.',
+          );
+        }
+        await addRecipient(cert);
+        return cert;
+      } catch (error) {
+        if (!_temporaryBankError(error)) rethrow;
+        _connectionProblem(error);
       }
-      await addRecipient(cert);
-      return cert;
     }
     for (final cert in merchants) {
       if (cert['body']['account_id'] == target &&
@@ -959,10 +1085,7 @@ class BeyondNetEngine extends ChangeNotifier {
     final authenticated = authorizePayment != null
         ? await authorizePayment!()
         : await auth.authenticate(
-            localizedReason:
-                'Authorize a demo payment of ₹${(amount / 100).toStringAsFixed(2)} to ${beneficiary['display_name'] ?? beneficiary['account_id']}',
-            biometricOnly: false,
-            persistAcrossBackgrounding: true,
+            'Authorize a demo payment of ₹${(amount / 100).toStringAsFixed(2)} to ${beneficiary['display_name'] ?? beneficiary['account_id']}',
           );
     if (!authenticated) {
       throw StateError('Payment authorization was cancelled.');
@@ -990,7 +1113,7 @@ class BeyondNetEngine extends ChangeNotifier {
       body['sender_mailbox'] as String,
       body['expires_at'] as int,
     );
-    await store.createPayment(p, {
+    final intent = <String, dynamic>{
       for (final entry in body.entries)
         if (entry.key != 'pin') entry.key: entry.value,
       'name': beneficiary['display_name'] ?? beneficiary['account_id'],
@@ -999,13 +1122,24 @@ class BeyondNetEngine extends ChangeNotifier {
       'transport': bankReachable
           ? 'Sending the original request to the bank'
           : 'Looking for a nearby phone to carry this request',
-    });
+    };
+    await store.createPayment(p, intent);
+    payments = [intent, ...payments.where((row) => row['payment_id'] != id)];
     seekingRelay = !bankReachable;
-    await log('Payment request saved. Waiting for a verified bank decision.');
-    await reload();
-    notifyListeners();
+    _discoveryStarted[p['id'] as String] = nowSeconds;
+    peerRetry.clear();
+    try {
+      await log('Payment request saved. Waiting for a verified bank decision.');
+    } catch (_) {
+      // Authorization and reservation have committed. Return the same payment
+      // ID even if a secondary log or screen refresh failed.
+      lastError =
+          'Payment saved. Activity will refresh when storage is available.';
+    }
+    if (!_disposed) notifyListeners();
     _urgentBankWork = true;
     nextBankAttempt = DateTime.now();
+    if (bankReachable && timer?.isActive == true) unawaited(gatewayTick());
     unawaited(tick());
     return id;
   }
@@ -1048,7 +1182,13 @@ class BeyondNetEngine extends ChangeNotifier {
     String? token,
   }) async {
     final packet = await store.decideInvitation(id, allow, token: token);
-    if (packet == null) throw StateError('This request has expired.');
+    if (packet == null) {
+      await reload();
+      if (!_disposed) notifyListeners();
+      throw StateError(
+        'This request has ended. Check Nearby for the current offer.',
+      );
+    }
     try {
       await background?.clearRequest(id);
     } catch (_) {}
@@ -1058,9 +1198,11 @@ class BeyondNetEngine extends ChangeNotifier {
           : 'Declined a nearby payment request.',
     );
     if (allow) {
+      _discoveryStarted[id] = nowSeconds;
       _urgentBankWork = true;
       nextBankAttempt = DateTime.now();
       peerRetry.clear();
+      if (bankReachable) unawaited(gatewayTick());
       unawaited(tick());
     }
   }
@@ -1166,6 +1308,10 @@ class BeyondNetEngine extends ChangeNotifier {
         }
         relayEnabled = status['enabled'] == true;
         backgroundActive = status['running'] == true;
+        final transport = _radio;
+        if (transport is BleTransport && status['screenInteractive'] is bool) {
+          transport.setScreenInteractive(status['screenInteractive'] as bool);
+        }
         final nativeBlocked = status['blocked'] as String?;
         // A failed restore stays paused instead of repeatedly locking the
         // switch on every timer tick. Explicit retry or an adapter/permission
@@ -1341,6 +1487,39 @@ class BeyondNetEngine extends ChangeNotifier {
         }
         return {'op': 'recipient', 'certificate': null};
       case 'proofs':
+        if (cmd.containsKey('ids') || cmd.containsKey('receipt_id')) {
+          final ids = cmd['ids'];
+          final receiptId = cmd['receipt_id'];
+          bool validId(Object? id) =>
+              id is String && RegExp(r'^[a-f0-9]{64}$').hasMatch(id);
+          if ((ids != null && receiptId != null) ||
+              (ids != null &&
+                  (ids is! List ||
+                      ids.length > 8 ||
+                      ids.any((id) => !validId(id)))) ||
+              (receiptId != null && !validId(receiptId)) ||
+              (ids == null && receiptId == null)) {
+            throw StateError('Invalid targeted proof request');
+          }
+          final all = ids is List
+              ? await store.proofsForPackets(ids.cast<String>())
+              : await store.proofs();
+          final selected = <Json>[];
+          for (final proof in all.where(
+            (p) => ids != null
+                ? (ids as List).contains(p['body']['packet_id'])
+                : (p['body']['receipt_ids'] as List).contains(receiptId),
+          )) {
+            if (selected.length >= 8) break;
+            if (canonical({
+                  'proofs': [...selected, proof],
+                }).length <
+                maxRpcBytes - 2048) {
+              selected.add(proof);
+            }
+          }
+          return {'op': 'proofs', 'proofs': selected, 'next': null};
+        }
         final offset = cmd['offset'] ?? 0;
         if (offset is! int || offset < 0 || offset > 1000) {
           throw StateError('Invalid proof cursor');
@@ -1356,6 +1535,9 @@ class BeyondNetEngine extends ChangeNotifier {
         if (offset is! int || offset < 0 || offset > 1000) {
           throw StateError('Invalid inventory cursor');
         }
+        if (offset == 0) {
+          _rememberPeer(peer, online: cmd['online'] as bool?);
+        }
         final all = (await store.packets())
           ..sort((a, b) => (a['id'] as String).compareTo(b['id'] as String));
         final page = all.skip(offset).take(48).toList();
@@ -1367,6 +1549,7 @@ class BeyondNetEngine extends ChangeNotifier {
           'device_id': deviceId,
           'online': bankReachable,
           'routing': 4,
+          'proof_lookup': true,
           'connection_approval': false,
           'route_ready': bankReachable,
           'routes': [
@@ -1393,7 +1576,22 @@ class BeyondNetEngine extends ChangeNotifier {
         _offeredPackets.removeWhere((_, at) => at < nowSeconds - 120);
         if (_offeredPackets.length >= 1000) return {'op': 'missing'};
         _offeredPackets['${peer['device_id']}:${p['id']}'] = nowSeconds;
-        return {'op': 'packet', 'packet': forwarded(p)};
+        final response = <String, dynamic>{
+          'op': 'packet',
+          'packet': forwarded(p),
+        };
+        final proof = (await store.proofs())
+            .where(
+              (proof) =>
+                  (proof['body']['receipt_ids'] as List).contains(p['id']),
+            )
+            .firstOrNull;
+        if (proof != null &&
+            canonical({...response, 'proof': proof}).length <
+                maxRpcBytes - 2048) {
+          response['proof'] = proof;
+        }
+        return response;
       case 'ack':
         final id = cmd['id'];
         if (id is! String ||
@@ -1536,7 +1734,7 @@ class BeyondNetEngine extends ChangeNotifier {
     if (inserted && p['kind'] == 'payment' && bankReachable) {
       _urgentBankWork = true;
       nextBankAttempt = DateTime.now();
-      if (timer?.isActive == true) unawaited(tick());
+      if (timer?.isActive == true) unawaited(gatewayTick());
     }
     // Store before delivering or acknowledging. Crash recovery replays cached
     // signed receipts, never loses a packet after a successful storage ACK.
@@ -1545,6 +1743,12 @@ class BeyondNetEngine extends ChangeNotifier {
       await log(
         'Stored encrypted ${p['kind']} packet ${p['id'].toString().substring(0, 8)}.',
       );
+      if (p['kind'] == 'receipt' && relay) {
+        // A newly stored result should be offered back now, rather than wait
+        // behind the idle-peer cooldown or another bank polling interval.
+        peerRetry.clear();
+        if (timer?.isActive == true) unawaited(tick());
+      }
     }
   }
 
@@ -1598,6 +1802,27 @@ class BeyondNetEngine extends ChangeNotifier {
     }
   }
 
+  void _rememberPeer(Json identity, {bool? online, bool? routeReady}) {
+    if (_disposed || !relay) return;
+    final id = identity['device_id'] as String;
+    final previous = nearby.where((p) => p['device_id'] == id).firstOrNull;
+    final radioId = identityByRadio.entries
+        .where((e) => e.value == id)
+        .firstOrNull
+        ?.key;
+    final entry = <String, dynamic>{
+      'device_id': id,
+      'name': identity['display_name'] ?? identity['account_id'] ?? id,
+      'online': online ?? previous?['online'] ?? false,
+      'route_ready': routeReady ?? online ?? previous?['route_ready'] ?? false,
+      'rssi': _radio?.discovered[radioId]?.rssi ?? previous?['rssi'],
+      'at': nowSeconds,
+    };
+    nearby.remove(previous);
+    nearby.add(entry);
+    notifyListeners();
+  }
+
   Future<void> syncPeer(PeerRadio peer) async {
     final key = peer.peripheral.uuid.toString();
     final selectedDevice = identityByRadio[key];
@@ -1614,6 +1839,9 @@ class BeyondNetEngine extends ChangeNotifier {
         );
         peerIdentity = Map<String, dynamic>.from(checked['peer']);
         identityByRadio[key] = peerIdentity!['device_id'];
+        // A successful authenticated exchange proves this peer is still here,
+        // even while scanning is paused for its GATT transfer.
+        peer.seen = DateTime.now();
         return Map<String, dynamic>.from(checked['command']);
       }
 
@@ -1634,8 +1862,13 @@ class BeyondNetEngine extends ChangeNotifier {
     bool peerOnline = false;
     bool remoteRouteReady = false;
     int remoteRouting = 0;
+    bool targetedProofs = false;
     while (offset != null) {
-      final remote = await rpc({'op': 'inventory', 'offset': offset});
+      final remote = await rpc({
+        'op': 'inventory',
+        'offset': offset,
+        'online': bankReachable,
+      });
       if (remote['op'] != 'inventory' ||
           remote['device_id'] != peerIdentity()['device_id'] ||
           remote['ids'] is! List ||
@@ -1646,6 +1879,7 @@ class BeyondNetEngine extends ChangeNotifier {
       peerOnline = remote['online'] == true;
       remoteRouteReady = remote['route_ready'] == true;
       remoteRouting = remote['routing'] is int ? remote['routing'] as int : 0;
+      targetedProofs = remote['proof_lookup'] == true;
       remoteIds.addAll((remote['ids'] as List).cast<String>());
       if (remote['routing'] == 2 ||
           remote['routing'] == 3 ||
@@ -1677,20 +1911,34 @@ class BeyondNetEngine extends ChangeNotifier {
     }
     final identity = peerIdentity();
     final peerId = identity['device_id'] as String;
-    final radioId = identityByRadio.entries
-        .where((entry) => entry.value == peerId)
-        .firstOrNull
-        ?.key;
-    nearby.removeWhere((x) => x['device_id'] == peerId);
-    nearby.add({
-      'device_id': peerId,
-      'name': identity['display_name'] ?? identity['account_id'],
-      'online': peerOnline,
-      'route_ready': remoteRouteReady,
-      'rssi': radioId == null ? null : radio.discovered[radioId]?.rssi,
-      'at': nowSeconds,
-    });
-    if (remoteRouting == 4) {
+    _awaitingPeer.remove(peerId);
+    _rememberPeer(identity, online: peerOnline, routeReady: remoteRouteReady);
+    if (remoteRouting == 4 && targetedProofs) {
+      final unresolved = await store.missingProofIds();
+      if (unresolved.isNotEmpty) {
+        final offset = _proofRound % unresolved.length;
+        final ids = [
+          ...unresolved.skip(offset),
+          ...unresolved.take(offset),
+        ].take(8).toList();
+        _proofRound += ids.length;
+        final page = await rpc({'op': 'proofs', 'ids': ids});
+        if (page['op'] != 'proofs' ||
+            page['proofs'] is! List ||
+            page['proofs'].length > ids.length ||
+            page['next'] != null) {
+          throw StateError('Invalid targeted proof response');
+        }
+        for (final proof in page['proofs']) {
+          if (proof is! Map ||
+              proof['body'] is! Map ||
+              !ids.contains(proof['body']['packet_id'])) {
+            throw StateError('Peer returned an unrelated delivery proof');
+          }
+          await receiveDeliveryProof(Map<String, dynamic>.from(proof));
+        }
+      }
+    } else if (remoteRouting == 4) {
       int? proofOffset = 0;
       while (proofOffset != null) {
         final page = await rpc({'op': 'proofs', 'offset': proofOffset});
@@ -1756,6 +2004,34 @@ class BeyondNetEngine extends ChangeNotifier {
         if (needsApproval) {
           await receiveOffer(packet, identity);
         } else {
+          if (value['proof'] is Map) {
+            final proof = Map<String, dynamic>.from(value['proof']);
+            if (proof['body']?['receipt_ids'] is! List ||
+                !(proof['body']['receipt_ids'] as List).contains(id)) {
+              throw StateError('Delivery proof is for another receipt');
+            }
+            await receiveDeliveryProof(proof);
+          } else if (targetedProofs &&
+              !(await store.proofs()).any(
+                (proof) => (proof['body']['receipt_ids'] as List).contains(id),
+              )) {
+            final page = await rpc({'op': 'proofs', 'receipt_id': id});
+            if (page['op'] != 'proofs' ||
+                page['proofs'] is! List ||
+                page['proofs'].length > 8 ||
+                page['next'] != null) {
+              throw StateError('Invalid receipt proof response');
+            }
+            for (final proof in page['proofs']) {
+              if (proof is! Map ||
+                  proof['body'] is! Map ||
+                  proof['body']['receipt_ids'] is! List ||
+                  !(proof['body']['receipt_ids'] as List).contains(id)) {
+                throw StateError('Peer returned an unrelated receipt proof');
+              }
+              await receiveDeliveryProof(Map<String, dynamic>.from(proof));
+            }
+          }
           await accept(packet, fromPeer: peerId);
         }
         if (!needsApproval && remoteRoutes.containsKey(id)) {
@@ -1805,22 +2081,18 @@ class BeyondNetEngine extends ChangeNotifier {
       }
       Json? offer;
       if (p['kind'] == 'payment') {
-        // Allow a short discovery pass before choosing an offline carrier.
-        final better = nearby.any(
-          (n) =>
-              n['device_id'] != peerId &&
-              n['online'] == true &&
-              n['at'] >= nowSeconds - 30 &&
-              RelayRouting.canForward(p, deviceId, n['device_id']),
-        );
-        if (!peerOnline && better) continue;
+        // The scheduler prefers reachable gateways. After the discovery grace,
+        // an old gateway advertisement or a decline must not veto this carrier.
         if (!peerOnline && _radio is BleTransport) {
           _discoveryStarted.removeWhere((_, at) => at < nowSeconds - 660);
           final started = _discoveryStarted.putIfAbsent(
             p['id'],
             () => nowSeconds,
           );
-          if (nowSeconds - started < 3) continue;
+          if (nowSeconds - started < 3) {
+            _awaitingPeer.add(peerId);
+            continue;
+          }
         }
         offer = await store.offerFor(p['id'], peerId, p['expires_at']);
         if (offer == null) continue;
@@ -1846,6 +2118,7 @@ class BeyondNetEngine extends ChangeNotifier {
       });
       if (response['op'] == 'offer' && response['id'] == p['id']) {
         if (response['state'] == 'pending') {
+          _awaitingPeer.add(peerId);
           sent++;
           continue;
         }
@@ -1963,11 +2236,23 @@ class BeyondNetEngine extends ChangeNotifier {
     }
   }
 
-  Future<void> gatewayTick() async {
+  Future<void> gatewayTick() {
+    if (_disposed) return Future<void>.value();
+    return _gatewayWork ??= _runGatewayTick().whenComplete(() {
+      _gatewayWork = null;
+      if (_urgentBankWork && bankReachable && !_disposed) {
+        nextBankAttempt = DateTime.now();
+        unawaited(gatewayTick());
+      }
+    });
+  }
+
+  Future<void> _runGatewayTick() async {
     if (DateTime.now().isBefore(nextBankAttempt)) return;
+    _urgentBankWork = false;
     try {
       if (!liveConnected) {
-        final health = await request('/api/health');
+        final health = await _verifiedHealth();
         if (health['fingerprint'] != trust['fingerprint']) {
           throw StateError('Bank trust changed. Stop and verify bank setup.');
         }
@@ -2070,14 +2355,18 @@ class BeyondNetEngine extends ChangeNotifier {
         );
         await _receiveBankReceipts(result['receipts']);
       }
+      bankReachable = true;
+      _bankWorkDelayed = false;
+      connectionUnstable = false;
+      bankAttention = null;
+      _connectionFailures = 0;
       backoffSeconds = 5;
       nextBankAttempt = DateTime.now().add(const Duration(seconds: 30));
     } catch (e) {
-      bankReachable = false;
-      network = e is BankFailure && e.status == 401
-          ? 'Sign in online to renew gateway session'
-          : 'Bank unreachable · retrying in ${backoffSeconds}s';
+      _bankWorkDelayed = _temporaryBankError(e);
+      _connectionProblem(e);
       nextBankAttempt = DateTime.now().add(Duration(seconds: backoffSeconds));
+      _nextHealthAttempt = nextBankAttempt;
       backoffSeconds = (backoffSeconds * 2).clamp(5, 60);
     }
   }
@@ -2089,10 +2378,10 @@ class BeyondNetEngine extends ChangeNotifier {
     working = true;
     try {
       await restoreBackgroundRelay();
-      // Online bank submission takes priority over Bluetooth work.
+      // Start bank delivery promptly, but a slow internet request must never
+      // own the Bluetooth/UI work lock. The bank worker coalesces all callers.
       if (bankReachable || gateway) {
-        _urgentBankWork = false;
-        await gatewayTick();
+        unawaited(gatewayTick());
       }
       if (relay && radio.running) {
         final selectedRoutes = <String>{?connectedPeer};
@@ -2102,13 +2391,14 @@ class BeyondNetEngine extends ChangeNotifier {
             if (selected != null) selectedRoutes.add(selected);
           }
         }
-        final candidates = radio.discovered.values
-            .where(
-              (p) =>
-                  DateTime.now().difference(p.seen) <
-                  const Duration(seconds: 25),
-            )
-            .toList();
+        final now = DateTime.now();
+        final candidates = radio.discovered.values.where((p) {
+          final key = p.peripheral.uuid.toString();
+          final id = identityByRadio[key];
+          return now.difference(p.seen) < const Duration(seconds: 25) &&
+              !(peerRetry[key]?.isAfter(now) ?? false) &&
+              (id == null || allowed(id));
+        }).toList();
         // Rotate equal-priority peers so a dense network cannot permanently
         // starve the only neighbour that leads towards an internet gateway.
         final rotated = candidates.isEmpty
@@ -2139,16 +2429,15 @@ class BeyondNetEngine extends ChangeNotifier {
         for (final peer in peers.take(2)) {
           if (_manualConnectionWaiting) break;
           final id = peer.peripheral.uuid.toString();
-          if (identityByRadio.containsKey(id) &&
-              !allowed(identityByRadio[id]!)) {
-            continue;
-          }
-          if (peerRetry[id]?.isAfter(DateTime.now()) ?? false) continue;
           try {
             await syncPeer(peer);
             peerFailures[id] = 0;
             peerRetry[id] = DateTime.now().add(
-              Duration(milliseconds: 7000 + _jitter.nextInt(3000)),
+              Duration(
+                milliseconds: _awaitingPeer.contains(identityByRadio[id])
+                    ? 1000 + _jitter.nextInt(700)
+                    : 7000 + _jitter.nextInt(3000),
+              ),
             );
           } catch (error) {
             lastError = 'Nearby connection: $error';
@@ -2174,23 +2463,14 @@ class BeyondNetEngine extends ChangeNotifier {
               'Nearby delivery active · ${bankReachable ? "Bank reachable" : "Looking for bank access"}',
         );
       }
-      final advertising = radio.discovered.entries
-          .where(
-            (e) =>
-                DateTime.now().difference(e.value.seen) <
-                const Duration(seconds: 25),
-          )
-          .map((e) => identityByRadio[e.key])
-          .toSet();
-      nearby.removeWhere(
-        (p) =>
-            p['at'] < nowSeconds - 45 || !advertising.contains(p['device_id']),
-      );
+      nearby.removeWhere((p) => p['at'] < nowSeconds - 45);
     } catch (e) {
       lastError = e.toString();
     } finally {
       working = false;
-      if (_urgentBankWork && bankReachable && !_disposed) unawaited(tick());
+      if (_urgentBankWork && bankReachable && !_disposed) {
+        unawaited(gatewayTick());
+      }
       if (!_disposed) notifyListeners();
     }
   }

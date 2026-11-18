@@ -13,6 +13,7 @@ import android.location.LocationManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
+import android.os.PowerManager
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.dart.DartExecutor
@@ -190,7 +191,8 @@ object RelayEngineHost {
 
     fun status(context: Context) = mapOf(
         "enabled" to enabled(context), "running" to RelayService.running,
-        "blocked" to readiness(context)
+        "blocked" to readiness(context),
+        "screenInteractive" to (context.getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive
     )
 
     fun changed(context: Context) {

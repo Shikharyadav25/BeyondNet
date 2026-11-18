@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+
 import 'package:beyondnet/android_ble_session.dart';
 import 'package:beyondnet/background_relay.dart';
 import 'package:beyondnet/ble_frames.dart';
@@ -12,7 +13,10 @@ class FakeCentral implements CentralManager {
   final events = StreamController<DiscoveredEventArgs>.broadcast();
   BluetoothLowEnergyState currentState = BluetoothLowEnergyState.poweredOn;
   int scans = 0, stops = 0;
+  final scanFilters = <List<UUID>?>[];
   Future<void>? scanWait, stopWait;
+  Future<void> Function()? onScan;
+  int disconnects = 0;
   @override
   BluetoothLowEnergyState get state => currentState;
   @override
@@ -20,7 +24,9 @@ class FakeCentral implements CentralManager {
   @override
   Future<void> startDiscovery({List<UUID>? serviceUUIDs}) async {
     scans++;
+    scanFilters.add(serviceUUIDs);
     await scanWait;
+    await onScan?.call();
   }
 
   @override
@@ -28,6 +34,31 @@ class FakeCentral implements CentralManager {
     stops++;
     await stopWait;
   }
+
+  @override
+  Future<void> connect(Peripheral peripheral) async {}
+
+  @override
+  Future<void> disconnect(Peripheral peripheral) async {
+    disconnects++;
+  }
+
+  @override
+  Future<List<GATTService>> discoverGATT(Peripheral peripheral) async => [
+    GATTService(
+      uuid: serviceId,
+      isPrimary: true,
+      includedServices: [],
+      characteristics: [
+        GATTCharacteristic.mutable(
+          uuid: rpcId,
+          properties: [GATTCharacteristicProperty.read],
+          permissions: [GATTCharacteristicPermission.read],
+          descriptors: [],
+        ),
+      ],
+    ),
+  ];
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -70,11 +101,16 @@ class FakePeripheral implements PeripheralManager {
   int advertisementStops = 0;
   Future<void>? clearWait, addWait, advertiseWait, stopWait;
   bool failReadResponse = false;
+  bool dropWriteAck = false;
   final responses = <Uint8List>[];
   @override
   Future<int> getMaximumNotifyLength(Central central) async => 180;
   @override
   Future<void> respondWriteRequest(GATTWriteRequest request) async {
+    if (dropWriteAck) {
+      dropWriteAck = false;
+      throw StateError('Phone disconnected before acknowledging the write');
+    }
     writeAcks++;
   }
 
@@ -207,6 +243,58 @@ void main() {
       expect(radio.discovered[peer.uuid.toString()]?.rssi, -57);
     },
   );
+  test('Concurrent transport starts share one registration and scan', () async {
+    await Future.wait([radio.start(), radio.start(), radio.start()]);
+    expect(peripheral.adds, 1);
+    expect(central.scans, 1);
+  });
+  test(
+    'A locked phone switches to the payment service filter and restores broad discovery on unlock',
+    () async {
+      await radio.start();
+      final locked = Completer<void>();
+      central.onScan = () async => locked.complete();
+      radio.setScreenInteractive(false);
+      await locked.future.timeout(const Duration(seconds: 1));
+      final unlocked = Completer<void>();
+      central.onScan = () async => unlocked.complete();
+      radio.setScreenInteractive(true);
+      await unlocked.future.timeout(const Duration(seconds: 1));
+      expect(central.scanFilters, [
+        null,
+        [serviceId],
+        null,
+      ]);
+    },
+  );
+  test(
+    'Duplicate scan on post-transfer resume preserves the exchange result',
+    () async {
+      final events = <String>[];
+      radio = BleTransport(
+        (_) async => {},
+        events.add,
+        central: central,
+        peripheral: peripheral,
+        androidSession: AndroidBleSession(),
+      );
+      await radio.start();
+      central.onScan = () async => throw PlatformException(
+        code: 'IllegalStateException',
+        message: 'Start discovery failed with error code: 1',
+      );
+      final result = await radio.connect(
+        PeerRadio(FakePeer(), -50),
+        (_) async => 'stored',
+      );
+      expect(result, 'stored');
+      expect(central.disconnects, 1);
+      expect(radio.running, isTrue);
+      await Future<void>.delayed(Duration.zero);
+      expect(events.last, contains('already active'));
+      expect(events.any((event) => event.contains('Exception')), isFalse);
+    },
+  );
   test('Refused GATT registration retries with a fresh server', () async {
     peripheral.failedAdds = 1;
     await radio.start();
@@ -215,6 +303,34 @@ void main() {
     expect(peripheral.writes.hasListener, isTrue);
     expect(radio.running, isTrue);
   });
+  test(
+    'A completed transfer never waits for the scanner resume callback',
+    () async {
+      await radio.start();
+      final pending = Completer<void>();
+      central.scanWait = pending.future;
+      try {
+        expect(
+          await radio
+              .connect(PeerRadio(FakePeer(), -50), (_) async => 'stored')
+              .timeout(const Duration(seconds: 1)),
+          'stored',
+        );
+        pending.complete();
+        central.scanWait = null;
+        // A following transfer can use the released peer lock.
+        expect(
+          await radio
+              .connect(PeerRadio(FakePeer(), -50), (_) async => 'second')
+              .timeout(const Duration(seconds: 1)),
+          'second',
+        );
+      } finally {
+        if (!pending.isCompleted) pending.complete();
+        central.scanWait = null;
+      }
+    },
+  );
   test(
     'Persistent registration failure cleans all state, exposes useful message and allows retry',
     () async {
@@ -419,6 +535,14 @@ void main() {
         utf8.encode('{"command":"inventory"}'),
         42,
       );
+      for (final part in request.take(request.length - 1)) {
+        await write(part);
+      }
+      peripheral.dropWriteAck = true;
+      await write(request.last);
+      expect(executions, 0);
+      expect(radio.processing, isEmpty);
+      // Reconnect and resend even if the transfer tag is reused.
       for (final part in request) {
         await write(part);
       }

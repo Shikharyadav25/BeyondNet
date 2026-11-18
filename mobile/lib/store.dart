@@ -86,6 +86,46 @@ class LocalStore {
           )
           .toList();
 
+  Future<List<Json>> proofsForPackets(List<String> ids) async {
+    if (ids.isEmpty) return [];
+    final slots = List.filled(ids.length, '?').join(',');
+    final rows = await db.query(
+      'delivery_proofs',
+      columns: ['data'],
+      where: 'expiry>? AND id IN ($slots)',
+      whereArgs: [nowSeconds, ...ids],
+    );
+    return rows
+        .map(
+          (row) => Map<String, dynamic>.from(jsonDecode(row['data'] as String)),
+        )
+        .toList();
+  }
+
+  Future<List<String>> missingProofIds() async {
+    final carried = await db.rawQuery(
+      "SELECT p.id FROM packets p JOIN relay_invitations i ON i.id=p.id "
+      "WHERE i.state='accepted' AND p.uploaded=0 AND p.expiry>? ORDER BY p.id",
+      [nowSeconds],
+    );
+    final ids = <String>{
+      for (final p in await payments())
+        if (!['paid', 'rejected'].contains(p['state']) &&
+            p['packet_id'] is String)
+          p['packet_id'] as String,
+      for (final row in carried) row['id'] as String,
+    };
+    if (ids.isEmpty) return [];
+    final known = await db.query(
+      'delivery_proofs',
+      columns: ['id'],
+      where: 'expiry>?',
+      whereArgs: [nowSeconds],
+    );
+    ids.removeAll(known.map((r) => r['id']));
+    return ids.toList();
+  }
+
   Future<void> saveProof(Json proof) => db.transaction((tx) async {
     final b = proof['body'];
     final exists = await tx.query(
@@ -347,12 +387,7 @@ class LocalStore {
     }
     return db.transaction((tx) async {
       final clock = nowSeconds;
-      await tx.update(
-        'relay_invitations',
-        {'state': 'expired'},
-        where: "state='pending' AND expiry<=?",
-        whereArgs: [clock],
-      );
+      await _expireInvitations(tx, clock);
       if ((await tx.query(
         'packets',
         where: 'id=?',
@@ -370,35 +405,24 @@ class LocalStore {
         if (row['state'] == 'accepted' || row['state'] == 'declined') {
           return row['state'] as String;
         }
-        if (deadline != null && token != row['offer_token']) {
-          await tx.update(
-            'relay_invitations',
-            {
-              'state': 'pending',
-              'offer_deadline': deadline,
-              'offer_token': token,
-            },
-            where: 'id=?',
-            whereArgs: [packet['id']],
-          );
-          return 'pending';
+        if (deadline == null ||
+            token == row['offer_token'] ||
+            (row['state'] == 'pending' && row['source'] != source)) {
+          return row['state'] as String;
         }
-        if (row['offer_deadline'] != null &&
-            (row['offer_deadline'] as int) <= clock) {
-          return 'expired';
-        }
-        return row['state'] as String;
+        // A new generation reopens the inbox item with its current sender,
+        // packet route and token. Check capacity as for a brand-new request.
       }
       final count = Sqflite.firstIntValue(
         await tx.rawQuery(
-          "SELECT COUNT(*) FROM relay_invitations WHERE state='pending' AND expiry>?",
-          [clock],
+          "SELECT COUNT(*) FROM relay_invitations WHERE state='pending' AND id<>?",
+          [packet['id']],
         ),
       )!;
       final fromPeer = Sqflite.firstIntValue(
         await tx.rawQuery(
-          "SELECT COUNT(*) FROM relay_invitations WHERE state='pending' AND source=? AND expiry>?",
-          [source, clock],
+          "SELECT COUNT(*) FROM relay_invitations WHERE state='pending' AND source=? AND id<>?",
+          [source, packet['id']],
         ),
       )!;
       if (count >= 40 || fromPeer >= 8) {
@@ -413,10 +437,18 @@ class LocalStore {
         'state': 'pending',
         'offer_deadline': deadline,
         'offer_token': token,
-      });
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
       return 'new';
     });
   }
+
+  Future<int> _expireInvitations(DatabaseExecutor database, int clock) =>
+      database.update(
+        'relay_invitations',
+        {'state': 'expired'},
+        where: "state='pending' AND (expiry<=? OR offer_deadline<=?)",
+        whereArgs: [clock, clock],
+      );
 
   Future<List<Json>> invitations() async => (await db.query(
     'relay_invitations',
@@ -747,12 +779,7 @@ class LocalStore {
       where: 'at<?',
       whereArgs: [nowSeconds - 7 * 86400],
     );
-    await db.update(
-      'relay_invitations',
-      {'state': 'expired'},
-      where: "state='pending' AND expiry<=?",
-      whereArgs: [nowSeconds],
-    );
+    await _expireInvitations(db, nowSeconds);
     await db.delete(
       'relay_invitations',
       where: 'expiry<?',

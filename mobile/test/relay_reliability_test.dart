@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+
 import 'package:beyondnet/ble_transport.dart';
 import 'package:beyondnet/engine.dart';
 import 'package:beyondnet/protocol.dart';
@@ -84,15 +85,26 @@ void main() {
     bool interrupt = false,
     bool legacy = false,
     bool approvedProtocol = false,
+    List<Json>? commands,
+    bool stripReceiptProof = false,
+    bool legacyProofLookup = false,
   }) async {
     Json? identity;
     await a.syncPackets((command) async {
+      commands?.add(command);
       final requestId = 'edge-${requestNumber++}';
       final request = decodeFrames(
         await a.signedRpc(command, requestId),
         interrupted: interrupt && command['op'] == 'offer',
       );
       var response = await b.handleRpc(request);
+      if ((stripReceiptProof && command['op'] == 'get') ||
+          (legacyProofLookup && command['op'] == 'inventory')) {
+        final value = Map<String, dynamic>.from(response['body']['command']);
+        if (stripReceiptProof) value.remove('proof');
+        if (legacyProofLookup) value.remove('proof_lookup');
+        response = await b.signedRpc(value, requestId);
+      }
       if (!approvedProtocol && !legacy && command['op'] == 'offer') {
         final id = command['packet']['id'] as String;
         if ((await b.store.packet(id)) == null) {
@@ -190,6 +202,124 @@ void main() {
       }),
     );
   }
+
+  test('Historical delivery proofs do not delay a new payment offer', () async {
+    final a = await node('A'), b = await node('B', online: true);
+    final bank = await ed.newKeyPairFromSeed(
+      base64Decode(fixture['sign_seed']),
+    );
+    for (var i = 0; i < 60; i++) {
+      await b.receiveDeliveryProof(
+        await sign(bank, {
+          'v': 1,
+          'type': 'delivery_proof',
+          'mesh_id': 'test-mesh',
+          'packet_id': i.toRadixString(16).padLeft(64, '0'),
+          'receipt_ids': [(i + 100).toRadixString(16).padLeft(64, '0')],
+          'recorded_at': nowSeconds,
+          'expires_at': nowSeconds + 86400,
+        }),
+      );
+    }
+    final p = await payment(a);
+    final commands = <Json>[];
+    await contact(a, b, approvedProtocol: true, commands: commands);
+    expect(b.invitations.single['id'], p['id']);
+    expect(commands.map((c) => c['op']), ['inventory', 'offer']);
+    expect(await a.store.proofs(), isEmpty);
+  });
+
+  test('Only unresolved owned payments request targeted bank proofs', () async {
+    final a = await node('A'), b = await node('B', online: true);
+    final p = await payment(a);
+    await a.store.putPayment({
+      'payment_id': 'pending-payment',
+      'packet_id': p['id'],
+      'state': 'relayed',
+      'sender': a.accountId,
+      'recipient': 'shop@beyondnet',
+      'amount': 100,
+    });
+    final bank = await ed.newKeyPairFromSeed(
+      base64Decode(fixture['sign_seed']),
+    );
+    await b.receiveDeliveryProof(
+      await sign(bank, {
+        'v': 1,
+        'type': 'delivery_proof',
+        'mesh_id': 'test-mesh',
+        'packet_id': p['id'],
+        'receipt_ids': ['e' * 64],
+        'recorded_at': nowSeconds,
+        'expires_at': nowSeconds + 86400,
+      }),
+    );
+    final commands = <Json>[];
+    await contact(a, b, commands: commands);
+    expect(commands.where((c) => c['op'] == 'proofs').single['ids'], [p['id']]);
+    expect((await a.store.proofs()).single['body']['packet_id'], p['id']);
+    expect((await a.store.payments()).single['state'], 'relayed');
+    expect(commands.any((c) => c['op'] == 'offer'), isFalse);
+  });
+
+  for (final legacy in [false, true]) {
+    test(
+      'Receipt proof recovery works with ${legacy ? 'legacy pagination' : 'a separate targeted lookup'}',
+      () async {
+        final a = await node('A'), b = await node('B');
+        final receipt = await makePacket(
+          'receipt',
+          Map<String, dynamic>.from(fixture['box']),
+          randomCapability(),
+          nowSeconds + 86400,
+          path: ['A'],
+        );
+        await bankEvidence(b, receipt);
+        await b.accept(receipt);
+        final commands = <Json>[];
+        await contact(
+          a,
+          b,
+          commands: commands,
+          stripReceiptProof: true,
+          legacyProofLookup: legacy,
+        );
+        expect(await a.store.packet(receipt['id']), isNotNull);
+        expect(await a.store.proofs(), hasLength(1));
+        expect(
+          await a.store.receipts(),
+          isEmpty,
+        ); // Still opaque without its private key.
+        final lookup = commands.where((c) => c['op'] == 'proofs').first;
+        expect(
+          legacy ? lookup['offset'] : lookup['receipt_id'],
+          legacy ? 0 : receipt['id'],
+        );
+      },
+    );
+  }
+
+  test(
+    'Targeted proof requests reject malformed and oversized selectors',
+    () async {
+      final b = await node('B');
+      for (final request in [
+        {
+          'op': 'proofs',
+          'ids': ['not-an-id'],
+        },
+        {'op': 'proofs', 'ids': List.filled(9, 'a' * 64)},
+        {'op': 'proofs', 'receipt_id': 'invalid'},
+        {
+          'op': 'proofs',
+          'ids': ['a' * 64],
+          'receipt_id': 'b' * 64,
+        },
+      ]) {
+        await expectLater(b.command(request, {}), throwsStateError);
+      }
+    },
+  );
 
   setUp(() async {
     FlutterSecureStorage.setMockInitialValues({});
@@ -590,6 +720,78 @@ void main() {
     await b.store.decideInvitation(p['id'], true, token: 'new');
     expect(await b.store.packet(p['id']), isNotNull);
   });
+
+  test(
+    'Both phones see a verified peer after one direction of contact',
+    () async {
+      final payer = await node('payer'),
+          carrier = await node('carrier', online: true);
+      await contact(payer, carrier);
+      expect(payer.nearby.single['device_id'], carrier.deviceId);
+      expect(payer.nearby.single['online'], true);
+      expect(carrier.nearby.single['device_id'], payer.deviceId);
+      expect(carrier.nearby.single['online'], false);
+    },
+  );
+
+  test(
+    'A gateway decline leaves the offline carrier available immediately',
+    () async {
+      final payer = await node('payer'),
+          gateway = await node('gateway', online: true),
+          carrier = await node('carrier');
+      final p = await payment(payer);
+      await contact(payer, gateway, approvedProtocol: true);
+      await gateway.store.decideInvitation(p['id'], false);
+      await contact(payer, gateway, approvedProtocol: true);
+      await contact(payer, carrier, approvedProtocol: true);
+      expect(carrier.invitations.single['id'], p['id']);
+    },
+  );
+
+  test(
+    'An expired offer frees capacity and a new source gets the correct route and approval token',
+    () async {
+      final a = await node('A'), b = await node('B'), c = await node('C');
+      final p = await payment(a);
+      final old = randomCapability(), fresh = randomCapability();
+      await b.store.invite(
+        a.forwarded(p),
+        'A',
+        'Original',
+        deadline: nowSeconds + 30,
+        token: old,
+      );
+      // A different sender cannot replace a live offer the user may be reviewing.
+      await b.store.invite(
+        c.forwarded(p),
+        'C',
+        'Other',
+        deadline: nowSeconds + 30,
+        token: fresh,
+      );
+      expect((await b.store.invitations()).single['source'], 'A');
+      await b.store.db.update('relay_invitations', {
+        'offer_deadline': nowSeconds - 1,
+      });
+      expect(await b.store.invitations(), isEmpty);
+      final state = await b.receiveOffer(
+        c.forwarded(p),
+        c.certificate['body'],
+        deadline: nowSeconds + 30,
+        token: fresh,
+      );
+      expect(state, 'new');
+      expect(b.invitations.single['source'], 'C');
+      await expectLater(
+        b.store.decideInvitation(p['id'], true, token: old),
+        throwsStateError,
+      );
+      await b.store.decideInvitation(p['id'], true, token: fresh);
+      expect((await b.store.packet(p['id']))!['trail'], ['C']);
+      expect(await b.store.missingProofIds(), [p['id']]);
+    },
+  );
 
   test('Forged bank proof cannot suppress payment delivery', () async {
     final a = await node('A');

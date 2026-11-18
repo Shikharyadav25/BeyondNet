@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+
 import 'dart:io';
+
 import 'package:beyondnet/engine.dart';
 import 'package:beyondnet/main.dart';
 import 'package:beyondnet/protocol.dart';
@@ -216,6 +219,47 @@ void main() {
         await store.db.query('relay_invitations', where: "state='expired'"),
         hasLength(8),
       );
+    },
+  );
+
+  test(
+    'Thirty-second offer deadlines release peer capacity before the payment itself expires',
+    () async {
+      for (var i = 0; i < 8; i++) {
+        final packet = await makePacket(
+          'payment',
+          {'sample': i},
+          randomCapability(),
+          nowSeconds + 600,
+        );
+        await store.invite(
+          packet,
+          'peer',
+          'Peer',
+          deadline: nowSeconds + 30,
+          token: randomCapability(),
+        );
+      }
+      await store.db.update('relay_invitations', {
+        'offer_deadline': nowSeconds - 1,
+      });
+      final next = await makePacket(
+        'payment',
+        {'sample': 8},
+        randomCapability(),
+        nowSeconds + 600,
+      );
+      expect(
+        await store.invite(
+          next,
+          'peer',
+          'Peer',
+          deadline: nowSeconds + 30,
+          token: randomCapability(),
+        ),
+        'new',
+      );
+      expect((await store.invitations()).single['id'], next['id']);
     },
   );
 

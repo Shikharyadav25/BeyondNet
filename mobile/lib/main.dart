@@ -1206,6 +1206,12 @@ class _ShellState extends State<Shell> {
             const Hint(
               'Enable relay once, then the app screen can be closed. Bluetooth must stay on. Allow Nearby devices on Android 12+, or Location permission and Location on for Android 10–11. The background relay shows a notification and uses battery. Internet is optional; an online relay forwards requests to the bank automatically.',
             ),
+            if (e.invitations.isNotEmpty)
+              FilledButton.icon(
+                onPressed: () => setState(() => tab = 2),
+                icon: const Icon(Icons.inbox_outlined),
+                label: Text('Review relay requests (${e.invitations.length})'),
+              ),
             TextButton(
               onPressed: () => setState(() => tab = 2),
               child: const Text('Nearby setup & connections'),
@@ -1294,6 +1300,10 @@ class _ShellState extends State<Shell> {
               child: Text(
                 e.checkingConnection && e.internet == null
                     ? 'Checking your connection…'
+                    : e.bankAttention != null
+                    ? e.bankAttention!
+                    : e.connectionUnstable
+                    ? 'Connection unstable · retrying'
                     : e.bankReachable
                     ? 'You’re online'
                     : e.internet == false
@@ -1316,7 +1326,9 @@ class _ShellState extends State<Shell> {
         ),
         const SizedBox(height: 7),
         Hint(
-          e.bankReachable
+          e.connectionUnstable
+              ? 'Your saved balance and history remain available. Pending payments will update after a verified bank response.'
+              : e.bankReachable
               ? 'Pay directly. ${e.liveConnected ? 'Live payment updates are connected.' : 'Payment status will sync automatically.'}'
               : 'Create a payment using a saved recipient or their QR. After authorization, nearby phones can carry your request to the bank.',
         ),
@@ -1509,9 +1521,71 @@ class _ShellState extends State<Shell> {
           ),
     ],
   );
+  final decidingInvitations = <String>{};
+
+  Future<void> decideInvitation(Json invitation, bool allow) async {
+    final id = invitation['id'] as String;
+    if (decidingInvitations.contains(id)) return;
+    setState(() => decidingInvitations.add(id));
+    try {
+      await e.decideRelayInvitation(
+        id,
+        allow,
+        token: invitation['offer_token'] as String?,
+      );
+    } catch (error) {
+      if (mounted) await alert(context, error);
+    } finally {
+      if (mounted) setState(() => decidingInvitations.remove(id));
+    }
+  }
+
   Widget nearbyPage() => ListView(
     padding: const EdgeInsets.all(23),
     children: [
+      if (e.invitations.isNotEmpty) ...[
+        const Eyebrow('REQUESTS WAITING FOR YOUR APPROVAL'),
+        const SizedBox(height: 10),
+        ...e.invitations.map(
+          (invitation) => Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Box(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${invitation['name']} wants this phone to carry an encrypted payment.',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 7),
+                  const Hint(
+                    'Accepting saves this encrypted request and automatically looks for bank access or the next phone. Your money is never used.',
+                  ),
+                  Row(
+                    children: [
+                      TextButton(
+                        onPressed:
+                            decidingInvitations.contains(invitation['id'])
+                            ? null
+                            : () => decideInvitation(invitation, false),
+                        child: const Text('Decline'),
+                      ),
+                      FilledButton(
+                        onPressed:
+                            decidingInvitations.contains(invitation['id'])
+                            ? null
+                            : () => decideInvitation(invitation, true),
+                        child: const Text('Accept & carry'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+      ],
       const Eyebrow('EVERY PARTICIPATING PHONE CAN HELP'),
       const SizedBox(height: 13),
       const Text(
@@ -1598,63 +1672,6 @@ class _ShellState extends State<Shell> {
         ),
       ),
       const SizedBox(height: 20),
-      if (e.invitations.isNotEmpty) ...[
-        const Eyebrow('REQUESTS WAITING FOR YOUR APPROVAL'),
-        const SizedBox(height: 10),
-        ...e.invitations.map(
-          (invitation) => Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: Box(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '${invitation['name']} wants this phone to carry an encrypted payment.',
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 7),
-                  const Hint(
-                    'Accepting saves this encrypted request and automatically looks for bank access or the next phone. Your money is never used.',
-                  ),
-                  Row(
-                    children: [
-                      TextButton(
-                        onPressed: () async {
-                          try {
-                            await e.decideRelayInvitation(
-                              invitation['id'] as String,
-                              false,
-                              token: invitation['offer_token'] as String?,
-                            );
-                          } catch (error) {
-                            if (mounted) await alert(context, error);
-                          }
-                        },
-                        child: const Text('Decline'),
-                      ),
-                      FilledButton(
-                        onPressed: () async {
-                          try {
-                            await e.decideRelayInvitation(
-                              invitation['id'] as String,
-                              true,
-                              token: invitation['offer_token'] as String?,
-                            );
-                          } catch (error) {
-                            if (mounted) await alert(context, error);
-                          }
-                        },
-                        child: const Text('Accept & carry'),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 10),
-      ],
       if (!e.bankReachable && e.relayQueue.isNotEmpty)
         const Box(
           child: Hint(
@@ -1662,9 +1679,13 @@ class _ShellState extends State<Shell> {
           ),
         ),
       if (e.nearby.isEmpty)
-        const Box(
+        Box(
           child: Hint(
-            'No verified peers yet. Enable Nearby relay on another enrolled phone and move within Bluetooth range. The app screen can be closed after enabling relay.',
+            !e.relay
+                ? 'Turn on Nearby relay on both enrolled phones to find each other.'
+                : e.unverifiedPeerCount > 0
+                ? 'Nearby signal found. Verifying the other phone’s enrollment…'
+                : 'Looking for a phone. Enable Bluetooth and Nearby relay on both phones and bring them closer.',
           ),
         ),
       ...e.nearby.map(
@@ -2279,6 +2300,8 @@ class PaymentDetails extends StatelessWidget {
                   ? 'Payment rejected'
                   : expired
                   ? 'Outcome not yet known'
+                  : p['state'] == 'relayed'
+                  ? 'With a relay · awaiting bank receipt'
                   : engine.bankReachable
                   ? 'Sending payment request'
                   : 'Finding a way to the bank',

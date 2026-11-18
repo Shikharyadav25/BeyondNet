@@ -9,6 +9,7 @@ import 'package:bluetooth_low_energy/bluetooth_low_energy.dart';
 import 'protocol.dart';
 import 'android_ble_session.dart';
 import 'ble_frames.dart';
+import 'ble_discovery.dart';
 
 // Small ATT-safe frames: one flag byte + <=19 bytes, never a long GATT read.
 // Bit 0 starts a message; bit 1 ends it. Empty [0] means response pending.
@@ -99,14 +100,27 @@ class BleTransport implements PeerTransport {
   final List<StreamSubscription> subscriptions = [];
   final Future<Json> Function(Json) handler;
   final void Function(String) onEvent;
+  final void Function()? onPeerDiscovered;
   @override
   bool running = false;
   bool _connecting = false;
+  Future<void>? _starting;
+  bool _screenInteractive = true;
+  late final BleDiscovery _discovery = BleDiscovery(
+    startScan: () => central.startDiscovery(
+      serviceUUIDs: _screenInteractive ? null : [_serviceId],
+    ),
+    stopScan: central.stopDiscovery,
+    onEvent: onEvent,
+    startTimeout: operationTimeout,
+    stopTimeout: cleanupTimeout,
+  );
   Timer? cleanup;
   BleTransport(
     this.handler,
     this.onEvent, {
     this.campus = false,
+    this.onPeerDiscovered,
     CentralManager? central,
     PeripheralManager? peripheral,
     AndroidBleSession? androidSession,
@@ -116,9 +130,20 @@ class BleTransport implements PeerTransport {
        peripheral = peripheral ?? PeripheralManager(),
        androidSession =
            androidSession ?? (Platform.isAndroid ? AndroidBleSession() : null);
+
+  void setScreenInteractive(bool interactive) {
+    if (_screenInteractive == interactive) return;
+    _screenInteractive = interactive;
+    if (running && !_connecting) unawaited(_discovery.reconfigure());
+  }
+
   @override
-  Future<void> start() async {
-    if (running) return;
+  Future<void> start() {
+    if (running) return Future<void>.value();
+    return _starting ??= _startOwned().whenComplete(() => _starting = null);
+  }
+
+  Future<void> _startOwned() async {
     if (_owner != null && _owner != this) {
       throw StateError(
         'Nearby Bluetooth is being used by ${_owner!.campus ? 'Campus' : 'Payments'}. Turn off Nearby in that feature before switching. Saved requests are retained.',
@@ -165,7 +190,18 @@ class BleTransport implements PeerTransport {
           return;
         }
         final id = e.peripheral.uuid.toString();
-        discovered[id] = PeerRadio(e.peripheral, e.rssi);
+        final known = discovered[id];
+        final now = DateTime.now();
+        final fresh =
+            known == null ||
+            now.difference(known.seen) >= const Duration(seconds: 25);
+        if (known == null) {
+          discovered[id] = PeerRadio(e.peripheral, e.rssi);
+        } else {
+          known.rssi = e.rssi;
+          known.seen = now;
+        }
+        if (fresh) onPeerDiscovered?.call();
       }),
     );
     subscriptions.add(
@@ -325,12 +361,13 @@ class BleTransport implements PeerTransport {
           )
           .timeout(operationTimeout);
       startupStep = 'scanning for nearby phones';
-      await central.startDiscovery().timeout(operationTimeout);
+      await _discovery.start();
       running = true;
       cleanup = Timer.periodic(const Duration(seconds: 20), (_) {
         for (final id in touched.keys.toList()) {
           if (DateTime.now().difference(touched[id]!).inSeconds > 40 &&
-              !processing.contains(id)) {
+              !processing.contains(id) &&
+              !processing.contains('indexed:$id')) {
             incoming.remove(id);
             outgoing.remove(id);
             indexed.remove(id);
@@ -366,6 +403,7 @@ class BleTransport implements PeerTransport {
     String id,
   ) async {
     var acknowledged = false;
+    var ownsCommand = false;
     try {
       if (e.request.offset != 0 || e.request.value.isEmpty) {
         throw const FormatException('Invalid BLE write');
@@ -392,7 +430,10 @@ class BleTransport implements PeerTransport {
         session.selected = 0;
       }
       final message = session.assembly.add(frame);
-      if (message != null) processing.add('indexed:$id');
+      if (message != null) {
+        ownsCommand = true;
+        processing.add('indexed:$id');
+      }
       await peripheral.respondWriteRequest(e.request);
       acknowledged = true;
       if (message == null) return;
@@ -419,11 +460,12 @@ class BleTransport implements PeerTransport {
           utf8.encode('{"error":"Peer exchange rejected"}'),
           session.assembly.transfer!,
         );
-      } finally {
-        processing.remove('indexed:$id');
       }
     } catch (_) {
       if (!acknowledged) {
+        // The final frame arrived but its write was never acknowledged. A
+        // reconnect must be able to start the same command from frame zero.
+        if (ownsCommand) indexed.remove(id);
         try {
           await peripheral.respondWriteRequestWithError(
             e.request,
@@ -432,6 +474,8 @@ class BleTransport implements PeerTransport {
         } catch (_) {}
       }
       onEvent('Bluetooth exchange interrupted; saved packets will retry.');
+    } finally {
+      if (ownsCommand) processing.remove('indexed:$id');
     }
   }
 
@@ -453,8 +497,8 @@ class BleTransport implements PeerTransport {
       // scan competes with a connection and hundreds of ATT writes. Keep the
       // peripheral advertiser running so the other phone can still find us.
       if (running) {
-        await central.stopDiscovery().timeout(const Duration(seconds: 3));
         scanningPaused = true;
+        await _discovery.stop();
       }
       await central.connect(p).timeout(const Duration(seconds: 10));
       final services = await central
@@ -539,14 +583,12 @@ class BleTransport implements PeerTransport {
       try {
         await central.disconnect(p).timeout(const Duration(seconds: 3));
       } catch (_) {}
-      if (scanningPaused && running) {
-        try {
-          await central.startDiscovery().timeout(const Duration(seconds: 6));
-        } catch (error) {
-          onEvent('Nearby scan could not resume: $error');
-        }
-      }
       _connecting = false;
+      if (scanningPaused && running) {
+        // Discovery cooldown/recovery must not hold a completed transfer or
+        // prevent connecting to an already authenticated nearby phone.
+        unawaited(_discovery.resume());
+      }
     }
   }
 
@@ -573,7 +615,9 @@ class BleTransport implements PeerTransport {
     }
 
     await Future.wait([
-      attempt(central.stopDiscovery),
+      // The discovery controller bounds each native call and drains any
+      // in-flight start before stopping. Do not release the shared owner early.
+      _discovery.stop().catchError((Object _) {}),
       attempt(peripheral.stopAdvertising),
       if (androidSession != null) attempt(androidSession!.close),
       for (final cancellation in cancellations) attempt(() => cancellation),

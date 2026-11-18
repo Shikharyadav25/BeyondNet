@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -120,6 +121,23 @@ void main() {
       expect(body['expires_at'] - body['created_at'], 600);
       expect(jsonEncode(intent).contains('123456'), isFalse);
       expect(jsonEncode(p).contains('"pin"'), isFalse);
+    },
+  );
+
+  test(
+    'An event log failure after saving returns the original payment ID',
+    () async {
+      sender.profile!['account']['pin_configured'] = true;
+      sender.profile!['trust']['box_key'] = fixture['box_public'];
+      sender.working = true;
+      await sender.store.db.execute(
+        "CREATE TRIGGER log_unavailable BEFORE INSERT ON events BEGIN "
+        "SELECT RAISE(ABORT, 'log unavailable'); END",
+      );
+      final id = await sender.pay(relay.certificate, 1000, pin: '123456');
+      expect((await sender.store.payments()).single['payment_id'], id);
+      expect(sender.payments.single['payment_id'], id);
+      expect(sender.availableBalance, 99000);
     },
   );
 

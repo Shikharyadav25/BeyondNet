@@ -1,7 +1,7 @@
 name: Campus and payment checks
 on:
   push:
-    branches: [feat/campus-mesh]
+    branches: [main, feat/campus-mesh]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -39,7 +39,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: '3.44.0'
+          flutter-version: '3.47.6'
           cache: true
       - run: mvn -B -f backend/pom.xml package
       - run: python -m pytest -q tests/test_java_bank.py tests/test_campus_server.py
@@ -57,3 +57,11 @@ jobs:
           python3 ../scripts/report-flutter-tests.py "$RUNNER_TEMP/flutter-tests.json"
           exit "$result"
       - run: python -m pytest -q tests/test_dart_interop.py
+      - run: flutter build apk --release
+        working-directory: mobile
+      - run: ./gradlew :app:testDebugUnitTest
+        working-directory: mobile/android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: beyondnet-android-ci
+          path: mobile/build/app/outputs/flutter-apk/app-release.apk
