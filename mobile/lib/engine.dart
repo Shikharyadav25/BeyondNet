@@ -255,6 +255,9 @@ class BeyondNetEngine extends ChangeNotifier {
   DateTime _lastHealthCheck = DateTime.fromMillisecondsSinceEpoch(0);
   bool _urgentBankWork = false;
   Future<void>? _gatewayWork;
+  @visibleForTesting
+  bool get deliveryBusy =>
+      working || checkingConnection || _openingSocket || _gatewayWork != null;
   int _inboxCursor = 0;
   Timer? connectionTimer;
   static const platform = MethodChannel('beyondnet/network');
@@ -1157,7 +1160,7 @@ class BeyondNetEngine extends ChangeNotifier {
     invitations = await store.invitations();
     connectionRequests = await store.connectionRequests();
     relayQueue = await store.awaitingRoute();
-    queueSize = (await store.packets()).length;
+    queueSize = await store.activePacketCount();
   }
 
   Future<void> decideConnectionRequest(String peer, bool allow) async {
@@ -1516,15 +1519,11 @@ class BeyondNetEngine extends ChangeNotifier {
               (ids == null && receiptId == null)) {
             throw StateError('Invalid targeted proof request');
           }
-          final all = ids is List
+          final matching = ids is List
               ? await store.proofsForPackets(ids.cast<String>())
-              : await store.proofs();
+              : await store.proofs(receiptId: receiptId as String);
           final selected = <Json>[];
-          for (final proof in all.where(
-            (p) => ids != null
-                ? (ids as List).contains(p['body']['packet_id'])
-                : (p['body']['receipt_ids'] as List).contains(receiptId),
-          )) {
+          for (final proof in matching) {
             if (selected.length >= 8) break;
             if (canonical({
                   'proofs': [...selected, proof],
@@ -1539,25 +1538,24 @@ class BeyondNetEngine extends ChangeNotifier {
         if (offset is! int || offset < 0 || offset > 1000) {
           throw StateError('Invalid proof cursor');
         }
-        final all = await store.proofs();
+        final page = await store.proofs(offset: offset, limit: 2);
         return {
           'op': 'proofs',
-          'proofs': all.skip(offset).take(1).toList(),
-          'next': offset + 1 < all.length ? offset + 1 : null,
+          'proofs': page.take(1).toList(),
+          'next': page.length > 1 ? offset + 1 : null,
         };
       case 'inventory':
         final offset = cmd['offset'] ?? 0;
         if (offset is! int || offset < 0 || offset > 1000) {
           throw StateError('Invalid inventory cursor');
         }
-        final all = (await store.packets())
-          ..sort((a, b) => (a['id'] as String).compareTo(b['id'] as String));
-        final page = all.skip(offset).take(48).toList();
+        final rows = await store.packets(pageOffset: offset, limit: 49);
+        final page = rows.take(48);
         final ids = page.map((p) => p['id']).toList();
         return {
           'op': 'inventory',
           'ids': ids,
-          'next': offset + 48 < all.length ? offset + 48 : null,
+          'next': rows.length > 48 ? offset + 48 : null,
           'device_id': deviceId,
           'online': bankReachable,
           'routing': 4,
@@ -1592,12 +1590,7 @@ class BeyondNetEngine extends ChangeNotifier {
           'op': 'packet',
           'packet': forwarded(p),
         };
-        final proof = (await store.proofs())
-            .where(
-              (proof) =>
-                  (proof['body']['receipt_ids'] as List).contains(p['id']),
-            )
-            .firstOrNull;
+        final proof = (await store.proofs(receiptId: p['id'])).firstOrNull;
         if (proof != null &&
             canonical({...response, 'proof': proof}).length <
                 maxRpcBytes - 2048) {
@@ -1730,10 +1723,7 @@ class BeyondNetEngine extends ChangeNotifier {
       }
     }
     if (p['kind'] == 'receipt' && !ownedReceipt && fromPeer != null) {
-      final known = await store.proofs();
-      if (!known.any(
-        (proof) => (proof['body']['receipt_ids'] as List).contains(p['id']),
-      )) {
+      if ((await store.proofs(receiptId: p['id'])).isEmpty) {
         throw const FormatException(
           'Receipt has no authenticated bank delivery proof',
         );
@@ -2025,9 +2015,7 @@ class BeyondNetEngine extends ChangeNotifier {
             }
             await receiveDeliveryProof(proof);
           } else if (targetedProofs &&
-              !(await store.proofs()).any(
-                (proof) => (proof['body']['receipt_ids'] as List).contains(id),
-              )) {
+              (await store.proofs(receiptId: id)).isEmpty) {
             final page = await rpc({'op': 'proofs', 'receipt_id': id});
             if (page['op'] != 'proofs' ||
                 page['proofs'] is! List ||
@@ -2115,12 +2103,7 @@ class BeyondNetEngine extends ChangeNotifier {
         );
       }
       final proof = p['kind'] == 'receipt'
-          ? (await store.proofs())
-                .where(
-                  (proof) =>
-                      (proof['body']['receipt_ids'] as List).contains(p['id']),
-                )
-                .firstOrNull
+          ? (await store.proofs(receiptId: p['id'])).firstOrNull
           : null;
       final response = await rpc({
         'proof': ?proof,
@@ -2422,14 +2405,9 @@ class BeyondNetEngine extends ChangeNotifier {
       if (bankReachable || gateway) {
         unawaited(gatewayTick());
       }
-      if (relay && radio.running) {
-        final selectedRoutes = <String>{?connectedPeer};
-        for (final packet in await store.packets()) {
-          if (packet['kind'] == 'payment') {
-            final selected = await store.route(packet['id'] as String);
-            if (selected != null) selectedRoutes.add(selected);
-          }
-        }
+      if (relay && radio.running && radio.discovered.isNotEmpty) {
+        final selectedRoutes = await store.activeRoutePeers();
+        if (connectedPeer case final peer?) selectedRoutes.add(peer);
         final now = DateTime.now();
         final candidates = radio.discovered.values.where((p) {
           final key = p.peripheral.uuid.toString();

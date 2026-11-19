@@ -280,6 +280,41 @@ void main() {
     expect(commands.any((c) => c['op'] == 'offer'), isFalse);
   });
 
+  test(
+    'Receipt lookup excludes a matching packet ID and expired proofs',
+    () async {
+      final b = await node('B');
+      String id(int n) => n.toRadixString(16).padLeft(64, '0');
+      final bank = await ed.newKeyPairFromSeed(
+        base64Decode(fixture['sign_seed']),
+      );
+      for (final (packet, receipt) in [(1, 2), (2, 3), (3, 2)]) {
+        await b.receiveDeliveryProof(
+          await sign(bank, {
+            'v': 1,
+            'type': 'delivery_proof',
+            'mesh_id': 'test-mesh',
+            'packet_id': id(packet),
+            'receipt_ids': [id(receipt)],
+            'recorded_at': nowSeconds,
+            'expires_at': nowSeconds + 300,
+          }),
+        );
+      }
+      await b.store.db.update(
+        'delivery_proofs',
+        {'expiry': nowSeconds - 1},
+        where: 'id=?',
+        whereArgs: [id(3)],
+      );
+      final result = await b.command({'op': 'proofs', 'receipt_id': id(2)}, {});
+      expect(
+        (result['proofs'] as List).map((proof) => proof['body']['packet_id']),
+        [id(1)],
+      );
+    },
+  );
+
   for (final legacy in [false, true]) {
     test(
       'Receipt proof recovery works with ${legacy ? 'legacy pagination' : 'a separate targeted lookup'}',

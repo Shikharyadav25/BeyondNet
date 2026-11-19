@@ -73,18 +73,34 @@ class LocalStore {
     );
   }
 
-  Future<List<Json>> proofs() async =>
-      (await db.query(
-            'delivery_proofs',
-            where: 'expiry>?',
-            whereArgs: [nowSeconds],
-            orderBy: 'id',
-            limit: 1000,
-          ))
-          .map(
-            (r) => Map<String, dynamic>.from(jsonDecode(r['data'] as String)),
-          )
-          .toList();
+  Future<List<Json>> proofs({
+    String? receiptId,
+    int offset = 0,
+    int limit = 1000,
+  }) async {
+    final rows = await db.query(
+      'delivery_proofs',
+      columns: ['data'],
+      where: receiptId == null ? 'expiry>?' : 'expiry>? AND instr(data, ?) > 0',
+      whereArgs: [nowSeconds, if (receiptId != null) jsonEncode(receiptId)],
+      orderBy: 'id',
+      offset: offset,
+      limit: limit,
+    );
+    // Older Android SQLite versions need no JSON extension. Only matching
+    // candidates cross the platform channel, and the signed field is checked.
+    final matches = <Json>[];
+    for (final row in rows) {
+      final proof = Map<String, dynamic>.from(
+        jsonDecode(row['data'] as String),
+      );
+      if (receiptId == null ||
+          (proof['body']['receipt_ids'] as List).contains(receiptId)) {
+        matches.add(proof);
+      }
+    }
+    return matches;
+  }
 
   Future<List<Json>> proofsForPackets(List<String> ids) async {
     if (ids.isEmpty) return [];
@@ -199,7 +215,12 @@ class LocalStore {
     // budget. A new offer generation cannot revive an old notification action.
     if (same != null && same['state'] == 'accepted') return null;
     if ((same == null || same['state'] == 'expired') &&
-        attempts.where((r) => r['state'] == 'pending' || r['state'] == 'accepted').length >= 2) {
+        attempts
+                .where(
+                  (r) => r['state'] == 'pending' || r['state'] == 'accepted',
+                )
+                .length >=
+            2) {
       return null;
     }
     if (attempts.length >= 32 && same == null) return null;
@@ -534,13 +555,17 @@ class LocalStore {
   Future<void> clearRoute(String packet) =>
       db.delete('relay_routes', where: 'packet=?', whereArgs: [packet]);
 
-  Future<String?> route(String packet) async {
-    final rows = await db.query(
-      'relay_routes',
-      where: 'packet=?',
-      whereArgs: [packet],
+  Future<Set<String>> activeRoutePeers() async {
+    final rows = await db.rawQuery(
+      'SELECT r.next_peer, p.data FROM relay_routes r JOIN packets p ON p.id=r.packet '
+      'WHERE p.expiry>?',
+      [nowSeconds],
     );
-    return rows.isEmpty ? null : rows.single['next_peer'] as String;
+    return {
+      for (final row in rows)
+        if (jsonDecode(row['data'] as String)['kind'] == 'payment')
+          row['next_peer'] as String,
+    };
   }
 
   Future<bool> requiresRoute(String packet) async {
@@ -648,12 +673,24 @@ class LocalStore {
     });
   }
 
-  Future<List<Json>> packets({bool activeOnly = true}) async {
+  Future<int> activePacketCount() async => Sqflite.firstIntValue(
+    await db.rawQuery('SELECT COUNT(*) FROM packets WHERE expiry>?', [
+      nowSeconds,
+    ]),
+  )!;
+
+  Future<List<Json>> packets({
+    bool activeOnly = true,
+    int? pageOffset,
+    int limit = 1000,
+  }) async {
     final rows = await db.query(
       'packets',
       where: activeOnly ? 'expiry>?' : null,
       whereArgs: activeOnly ? [nowSeconds] : null,
-      limit: 1000,
+      orderBy: pageOffset == null ? null : 'id',
+      offset: pageOffset,
+      limit: limit,
     );
     return rows
         .map(

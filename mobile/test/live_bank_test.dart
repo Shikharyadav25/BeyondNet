@@ -38,9 +38,11 @@ class LoopbackClient extends http.BaseClient {
   final http.Client inner = http.Client();
   final String? loseFirstResponseOn;
   bool responseLost = false;
+  bool online = true;
   LoopbackClient(this.port, {this.loseFirstResponseOn});
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    if (!online) throw const SocketException('This test phone is offline');
     final redirected = http.Request(
       request.method,
       request.url.replace(scheme: 'http', host: '127.0.0.1', port: port),
@@ -120,15 +122,23 @@ void main() {
           String? loseResponseOn,
         }) async {
           FlutterSecureStorage.setMockInitialValues({});
+          final client = LoopbackClient(
+            port,
+            loseFirstResponseOn: loseResponseOn,
+          );
           final e = BeyondNetEngine(
             transport: SimulatedRadio(),
-            client: LoopbackClient(port, loseFirstResponseOn: loseResponseOn),
+            client: client,
             authorizePayment: () async => true,
-            socketConnector: (url) => WebSocket.connect(
-              Uri.parse(
-                url,
-              ).replace(scheme: 'ws', host: '127.0.0.1', port: port).toString(),
-            ),
+            socketConnector: (url) async {
+              if (!client.online)
+                throw const SocketException('This test phone is offline');
+              return WebSocket.connect(
+                Uri.parse(url)
+                    .replace(scheme: 'ws', host: '127.0.0.1', port: port)
+                    .toString(),
+              );
+            },
           );
           nodes.add(e);
           await e.store.init(databasePath: '${dir.path}/$id.sqlite3');
@@ -218,8 +228,10 @@ void main() {
         Future<void> pause(BeyondNetEngine e) async {
           e.timer?.cancel();
           e.connectionTimer?.cancel();
-          await eventually(() => !e.working && !e.checkingConnection);
+          // Let detached bank work finish before taking the simulated phone offline.
+          await eventually(() => !e.deliveryBusy);
           e.closeLive();
+          (e.httpClient as LoopbackClient).online = false;
           e.bankReachable = false;
           e.internet = false;
           e.relay = true;
@@ -296,6 +308,8 @@ void main() {
         await secondGateway.store.decideInvitation(packetId, true);
         gateway.bankReachable = true;
         secondGateway.bankReachable = true;
+        (gateway.httpClient as LoopbackClient).online = true;
+        (secondGateway.httpClient as LoopbackClient).online = true;
         final results = await Future.wait([
           gateway.submitPacket(forwarded),
           secondGateway.submitPacket(forwarded),
@@ -365,6 +379,7 @@ void main() {
         await sender.reload();
         expect(sender.availableBalance, 87405);
         sender.bankReachable = true;
+        (sender.httpClient as LoopbackClient).online = true;
         sender.nextBankAttempt = DateTime.fromMillisecondsSinceEpoch(0);
         await sender.gatewayTick();
         await sender.reload();
@@ -387,8 +402,7 @@ void main() {
           e.timer?.cancel();
           e.connectionTimer?.cancel();
           final until = DateTime.now().add(const Duration(seconds: 45));
-          while ((e.working || e.checkingConnection) &&
-              DateTime.now().isBefore(until)) {
+          while (e.deliveryBusy && DateTime.now().isBefore(until)) {
             await Future<void>.delayed(const Duration(milliseconds: 50));
           }
           e.dispose();

@@ -491,6 +491,19 @@ void main() {
       expect(first['ids'].length, 48);
       expect(second['ids'].length, 7);
       expect(second['next'], isNull);
+      expect(await relay.store.activePacketCount(), 55);
+      final firstId = first['ids'].first as String;
+      final lastId = second['ids'].last as String;
+      await relay.store.chooseRoute(firstId, 'active-peer');
+      await relay.store.chooseRoute(lastId, 'expired-peer');
+      await relay.store.db.update(
+        'packets',
+        {'expiry': nowSeconds - 1},
+        where: 'id=?',
+        whereArgs: [lastId],
+      );
+      expect(await relay.store.activeRoutePeers(), {'active-peer'});
+      expect(await relay.store.activePacketCount(), 54);
       expect(
         <String>{
           ...(first['ids'] as List).cast<String>(),
