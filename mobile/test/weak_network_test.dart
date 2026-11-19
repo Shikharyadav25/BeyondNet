@@ -229,6 +229,22 @@ void main() {
     },
   );
 
+  test(
+    'Checking delivery probes a restored bank while Bluetooth is busy',
+    () async {
+      var inboxChecks = 0;
+      final e = await node((request) async {
+        if (request.url.path.startsWith('/api/receipts/')) inboxChecks++;
+        return okay(request);
+      });
+      expect(e.working, isTrue);
+      expect(e.bankReachable, isFalse);
+      await e.retryNow(checkBank: true);
+      expect(e.bankReachable, isTrue);
+      expect(inboxChecks, 1);
+    },
+  );
+
   test('successful health check cannot erase payment retry backoff', () async {
     final e = await node(
       (r) async => r.url.path.startsWith('/api/receipts/')

@@ -57,6 +57,22 @@ jobs:
           python3 ../scripts/report-flutter-tests.py "$RUNNER_TEMP/flutter-tests.json"
           exit "$result"
       - run: python -m pytest -q tests/test_dart_interop.py
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.47.6'
+          cache: true
+      - run: flutter pub get --enforce-lockfile
+        working-directory: mobile
       - run: flutter build apk --release
         working-directory: mobile
       - run: ./gradlew :app:testDebugUnitTest

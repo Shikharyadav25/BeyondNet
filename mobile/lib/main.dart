@@ -2430,7 +2430,9 @@ class PaymentDetails extends StatelessWidget {
             const SizedBox(height: 20),
             if (!paid && !rejected) ...[
               OutlinedButton.icon(
-                onPressed: engine.working ? null : () => engine.retryNow(),
+                onPressed: engine.checkingConnection
+                    ? null
+                    : () => engine.retryNow(checkBank: true),
                 icon: const Icon(Icons.refresh),
                 label: const Text('Check delivery again'),
               ),

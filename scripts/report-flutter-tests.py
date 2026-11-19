@@ -2,6 +2,7 @@
 """Report known test filenames/counts/categories without exporting raw test data."""
 import json
 from pathlib import Path
+import re
 import sys
 
 
@@ -35,6 +36,10 @@ def main():
             errors += 1
             failures.add(tests.get(event.get('testID'), 'runner'))
             categories.update(c for c in allowed if c in str(event.get('error', '')))
+            # Source locations identify the failing call without logging the
+            # test's generated keys, session tokens, or payment payloads.
+            for name, number in re.findall(r'(?:package:beyondnet/|(?:^|[\s/])test/)([\w/]+\.dart)[:\s]+(\d+)', str(event.get('stackTrace', '')))[:6]:
+                print(f'::notice::Flutter failure location: {name}:{number}')
         elif kind == 'testDone' and not event.get('hidden'):
             if event.get('skipped'):
                 skipped += 1

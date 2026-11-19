@@ -1189,14 +1189,9 @@ class BeyondNetEngine extends ChangeNotifier {
         'This request has ended. Check Nearby for the current offer.',
       );
     }
-    try {
-      await background?.clearRequest(id);
-    } catch (_) {}
-    await log(
-      allow
-          ? 'Request saved. Automatically looking for bank access or the next phone.'
-          : 'Declined a nearby payment request.',
-    );
+    invitations.removeWhere((row) => row['id'] == id);
+    if (!_disposed) notifyListeners();
+    unawaited(background?.clearRequest(id).catchError((Object _) {}));
     if (allow) {
       _discoveryStarted[id] = nowSeconds;
       _urgentBankWork = true;
@@ -1204,6 +1199,17 @@ class BeyondNetEngine extends ChangeNotifier {
       peerRetry.clear();
       if (bankReachable) unawaited(gatewayTick());
       unawaited(tick());
+    }
+    try {
+      await log(
+        allow
+            ? 'Request saved. Automatically looking for bank access or the next phone.'
+            : 'Declined a nearby payment request.',
+      );
+    } catch (_) {
+      lastError =
+          'Relay decision saved. Activity will refresh when storage is available.';
+      if (!_disposed) notifyListeners();
     }
   }
 
@@ -1319,7 +1325,8 @@ class BeyondNetEngine extends ChangeNotifier {
             relayBlocked == null &&
             profile != null) {
           final transport = radio;
-          if (transport is BleTransport && status['screenInteractive'] is bool) {
+          if (transport is BleTransport &&
+              status['screenInteractive'] is bool) {
             transport.setScreenInteractive(status['screenInteractive'] as bool);
           }
           if (!relay || !radio.running) await _startRadio();
@@ -1686,13 +1693,14 @@ class BeyondNetEngine extends ChangeNotifier {
       token: token,
     );
     if (state == 'new') {
-      await reload();
-      notifyListeners();
-      try {
-        await background?.noticeRequest(packet['id'] as String, name);
-      } catch (_) {
-        // The pending request remains visible in Nearby.
-      }
+      invitations = await store.invitations();
+      if (!_disposed) notifyListeners();
+      // Android notification delivery must not delay the storage acknowledgement.
+      unawaited(
+        background
+            ?.noticeRequest(packet['id'] as String, name)
+            .catchError((Object _) {}),
+      );
     }
     return state;
   }
@@ -2223,7 +2231,9 @@ class BeyondNetEngine extends ChangeNotifier {
       if (value is! Map ||
           value['kind'] != 'receipt' ||
           !expected.remove(value['id'])) {
-        throw const FormatException('Receipt differs from the signed bank response');
+        throw const FormatException(
+          'Receipt differs from the signed bank response',
+        );
       }
       await accept(Map<String, dynamic>.from(value));
     }
@@ -2504,10 +2514,15 @@ class BeyondNetEngine extends ChangeNotifier {
     }
   }
 
-  Future<void> retryNow() async {
+  Future<void> retryNow({bool checkBank = false}) async {
     nextBankAttempt = DateTime.now();
     peerRetry.clear();
+    final probe = checkBank ? checkConnection() : null;
     await tick();
+    if (probe != null) {
+      await probe;
+      if (bankReachable && !_disposed) await gatewayTick();
+    }
   }
 
   @override

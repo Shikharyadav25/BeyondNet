@@ -1,6 +1,6 @@
-# Payment-first relay flow — BeyondNet 1.6.0 (build 28)
+# Payment and relay testing on Android
 
-Use 1.6.0 on every participating phone and the updated bank. The Android package and local signing identity are preserved for in-place updates.
+For the discovery and reconnect fixes, test build 29 (1.6.1) from `main` with the 1.3.3 demo bank. Use the same build on every participating phone. An enrolled installation needs an APK signed by its existing signer to update in place.
 
 ## Payment and custody
 

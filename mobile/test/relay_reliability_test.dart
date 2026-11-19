@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:beyondnet/background_relay.dart';
 import 'package:beyondnet/ble_transport.dart';
 import 'package:beyondnet/engine.dart';
 import 'package:beyondnet/protocol.dart';
@@ -10,6 +11,16 @@ import 'package:beyondnet/store.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+class DelayedNotifications extends BackgroundRelay {
+  final pending = Completer<void>();
+
+  @override
+  Future<void> noticeRequest(String id, String name) => pending.future;
+
+  @override
+  Future<void> clearRequest(String id) => pending.future;
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -22,8 +33,15 @@ void main() {
   final nodes = <BeyondNetEngine>[];
   var requestNumber = 0;
 
-  Future<BeyondNetEngine> node(String id, {bool online = false}) async {
-    final e = BeyondNetEngine(authorizePayment: () async => true);
+  Future<BeyondNetEngine> node(
+    String id, {
+    bool online = false,
+    BackgroundRelay? notifications,
+  }) async {
+    final e = BeyondNetEngine(
+      authorizePayment: () async => true,
+      backgroundRelay: notifications,
+    );
     await e.store.init(databasePath: '${directory.path}/$id.sqlite3');
     e.signing = await ed.newKeyPair();
     e.encryption = await x.newKeyPair();
@@ -790,6 +808,36 @@ void main() {
       await b.store.decideInvitation(p['id'], true, token: fresh);
       expect((await b.store.packet(p['id']))!['trail'], ['C']);
       expect(await b.store.missingProofIds(), [p['id']]);
+    },
+  );
+
+  test(
+    'Android notifications cannot hold a saved offer or its approval open',
+    () async {
+      final notifications = DelayedNotifications();
+      final payer = await node('payer');
+      final carrier = await node('carrier', notifications: notifications);
+      carrier.working = true;
+      final p = await payment(payer);
+      try {
+        await contact(
+          payer,
+          carrier,
+          approvedProtocol: true,
+        ).timeout(const Duration(seconds: 2));
+        final offer = carrier.invitations.single;
+        await carrier
+            .decideRelayInvitation(
+              p['id'],
+              true,
+              token: offer['offer_token'] as String,
+            )
+            .timeout(const Duration(seconds: 2));
+        expect(carrier.invitations, isEmpty);
+        expect(await carrier.store.packet(p['id']), isNotNull);
+      } finally {
+        notifications.pending.complete();
+      }
     },
   );
 

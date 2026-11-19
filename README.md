@@ -1,4 +1,5 @@
-> **BeyondNet 1.6.0:** Payments and Campus are available from the app chooser. Payments authorize first and automatically seek online or offline carriers. See [the payment-first relay guide](docs/RELAY_APPROVAL_FLOW.md).
+> **Testing offline payments on `main`**
+> The 1.6.1 source includes Bluetooth reconnect and relay approval fixes. Use the same build on all participating phones. The bundled installer below is 1.6.0. [Payment and relay walkthrough](docs/RELAY_APPROVAL_FLOW.md)
 
 # BeyondNet
 
@@ -8,15 +9,15 @@ Campus: [architecture and provisioning](docs/CAMPUS.md). The local launcher shar
 
 BeyondNet is an Android payment proof of concept for environments with unreliable internet access. An offline phone sends a signed, encrypted payment request through a chain of enrolled Bluetooth devices. A phone with internet submits it to the Java demo bank, which records the outcome in PostgreSQL and returns a signed receipt through the available network.
 
-| Mobile release | Bank release | Supported platform | Payment environment |
+| Mobile source | Bank release | Supported platform | Payment environment |
 | --- | --- | --- | --- |
-| **1.6.0 · build 28** | **1.3.3** | **Android 10+** | **Simulated INR** |
+| **1.6.1 · build 29** | **1.3.3** | **Android 10+** | **Simulated INR** |
 
 > BeyondNet uses demo funds and has no real UPI or banking integration. Payment initiation can happen offline; final settlement requires an internet-connected gateway to reach the bank.
 
-**[Download Android 1.6.0](installers/BeyondNet-Android-1.6.0.apk)** · [Relay setup and testing](docs/RELAY_APPROVAL_FLOW.md) · [APK checksums](installers/SHA256SUMS.txt) · [Bank setup QR](installers/BeyondNet-bank-setup.png) · [Campus setup QR](installers/BeyondNet-campus-setup.png)
+**[Download bundled Android 1.6.0](installers/BeyondNet-Android-1.6.0.apk)** · [Relay setup and testing](docs/RELAY_APPROVAL_FLOW.md) · [APK checksums](installers/SHA256SUMS.txt) · [Bank setup QR](installers/BeyondNet-bank-setup.png) · [Campus setup QR](installers/BeyondNet-campus-setup.png)
 
-**159 app tests and 55 Java backend tests passed on 30 October 2026.** Checks cover direct online payments, a five-phone topology with real-bank settlement and offline receipt return, and an eight-handoff routing boundary. Physical Bluetooth range, locked-screen delivery and battery performance still require phone testing. Use version 1.6.0 on all participating phones. This APK retains the local signing identity used for 1.5.2–1.5.7; upgrading an older installation signed with a different key needs its original signer.
+**159 app tests and 55 Java backend tests passed on 30 October 2026.** Checks cover direct online payments, a five-phone topology with real-bank settlement and offline receipt return, and an eight-handoff routing boundary. Physical Bluetooth range, locked-screen delivery and battery performance still require phone testing. The bundled 1.6.0 APK retains the local signing identity used for 1.5.2–1.5.7; upgrading an older installation signed with a different key needs its original signer.
 
 Current signup includes lowercase payment IDs, live availability checks, name-based suggestions and an optional demonstration identity-input step after filling the account form. Document inputs are temporary and do not establish verified identity.
 
@@ -71,7 +72,7 @@ sequenceDiagram
     P->>R: Offer encrypted packet over BLE
     R->>R: Save request and notify user
     R-->>P: Invitation saved · payment still pending
-    R->>R: User accepts and selects next phone
+    R->>R: User accepts custody and the app finds the next phone
     R->>G: Offer encrypted packet over BLE
     G->>G: User accepts gateway request
     G->>B: Submit over WSS or HTTPS
@@ -79,9 +80,13 @@ sequenceDiagram
     B->>D: Check duplicate and funds, then atomically commit outcome
     D-->>B: Saved decision, ledger and receipts
     B-->>G: Signed, encrypted bank receipt
-    Note over P,B: Bank also queues the outcome for the sender's registered device
-    P->>B: On internet return, retrieve device inbox
-    B-->>P: Saved signed receipt
+    alt Offline return path available
+        G-->>R: Forward encrypted receipt and signed delivery proof
+        R-->>P: Return receipt when phones meet again
+    else Payer reconnects first
+        P->>B: Retrieve device inbox
+        B-->>P: Saved signed receipt
+    end
     P->>P: Verify receipt and update status
     Note over P,B: Online senders submit directly. Retries recover the original bank decision.
 ```
@@ -95,14 +100,14 @@ The authorization window is **10 minutes**, not a processing delay. Reachable re
 | Accounts | Personal/Merchant signup and sign-in, device enrollment, zero starting balance, idempotent demo funding |
 | Bank setup | Scan a QR or select its image from the gallery to import the HTTPS URL and trust fingerprint |
 | Payments | Recipient ID or signed identity QR, amount review, six-digit demo PIN and native screen-lock/biometric authorization |
-| Connectivity | Direct online submission, bank reachability checks, offline guidance and explicit connection to a verified nearby peer |
+| Connectivity | Direct online submission, bank reachability checks and automatic discovery of enrolled payment carriers |
 | Nearby delivery | BLE store-and-forward, durable queues, custody acknowledgments, loop avoidance, shorter-route repair, bounded fanout and retry backoff |
 | Background relay | Opt-in Android foreground service with a visible notification; forwarding can continue with the app screen closed or phone locked |
 | Receipts | Bank-signed encrypted outcomes, live WebSocket delivery, HTTPS recovery, persisted inbox cursors and alternate return routes |
 | Settlement | Funds preflight, unresolved-payment reservations, atomic debit/credit entries, duplicate recovery and bank-enforced balance checks |
 | Operator console | Local authenticated overview, payment decisions, ledger, enrollment QR and labelled software rehearsal |
 
-### Latest release: 1.4.5
+### Earlier release 1.4.5
 
 The Payment PIN page now updates when bank connectivity changes, probes the connection on opening, and provides **Check bank connection** without leaving the form. Android connectivity hints cannot indefinitely block a bank probe. Form validation and specific save errors make recovery clear. Install **1.4.5 over the existing app**; no further bank change is needed when already running the 1.4.4 backend. See [PIN setup recovery and acceptance steps](docs/RELEASE_1.4.5.md).
 
@@ -219,7 +224,7 @@ Keep the bank and tunnel running, and the laptop awake and online during testing
 
 ### 3. Install and enroll the phones
 
-Download [BeyondNet Android 1.4.5](https://raw.githubusercontent.com/Shikharyadav25/BeyondNet/v1.4.5/installers/BeyondNet-Android-1.4.5.apk) onto each Android 10+ phone, or build from source below. Update existing installations in place to preserve keys and queued payments.
+For the 1.6.1 fixes, build the Android app from `main` with Flutter 3.47.6. To update an enrolled phone in place, sign the build with the same key used for its installed APK. GitHub Actions also produces a test APK for fresh installations. [Android build checks](https://github.com/Shikharyadav25/BeyondNet/actions/workflows/campus-checks.yml)
 
 1. While online, scan the bank QR or select its image from the gallery.
 2. Create Personal and Merchant accounts with unique IDs ending in `@beyondnet` and passwords of at least eight characters.
@@ -232,9 +237,9 @@ If signup loses its response, the account may already exist. Use **Sign in** wit
 
 ### 4. Try offline delivery
 
-**Two phones:** enable Nearby relay on both, keep the gateway phone online, and switch off the sender's internet while leaving Bluetooth enabled. Scan and connect to the verified gateway, pay by ID or QR, then accept the request on the gateway.
+**Two phones.** Enable Nearby relay on both phones and keep Bluetooth on. Take the payer offline and leave the gateway online. On the payer, authorize one payment to a saved recipient or a recipient verified by QR. On the gateway, open **Nearby → Accept & carry**. Check **Activity** on the payer for the bank-signed outcome.
 
-**Three or more phones:** place an enrolled offline relay between the sender and an online gateway. The relay accepts the request and selects the next phone; the gateway accepts and uploads it. To demonstrate a chain, ensure the sender cannot directly reach the gateway. Match the final receipt with one debit and one credit in the bank. See the [mesh test guide](docs/MESH_TEST_GUIDE.md).
+**Three or more phones.** Keep the payer out of Bluetooth range of the gateway. Let an offline intermediate phone accept the request, then bring it near the online gateway and accept there. Reconnect the phones in reverse order to return the receipt while the payer stays offline. Match the payment ID and reference with one bank debit and credit. [Relay walkthrough](docs/RELAY_APPROVAL_FLOW.md)
 
 | Requirement | When needed |
 | --- | --- |
