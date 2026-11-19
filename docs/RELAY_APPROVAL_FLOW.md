@@ -1,6 +1,6 @@
 # Payment and relay testing on Android
 
-For the discovery and reconnect fixes, test build 29 (1.6.1) from `main` with the 1.3.3 demo bank. Use the same build on every participating phone. An enrolled installation needs an APK signed by its existing signer to update in place.
+Use Android 1.6.1 (build 29) on every participating phone with the 1.3.3 demo bank. Install the release APK over the bundled 1.6.0 app to keep the existing enrollment and pending payments. [Download the signed release](https://github.com/Shikharyadav25/BeyondNet/releases/tag/v1.6.1)
 
 ## Payment and custody
 

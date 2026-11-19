@@ -1,6 +1,3 @@
-> **Testing offline payments on `main`**
-> The 1.6.1 source includes Bluetooth reconnect and relay approval fixes. Use the same build on all participating phones. The bundled installer below is 1.6.0. [Payment and relay walkthrough](docs/RELAY_APPROVAL_FLOW.md)
-
 # BeyondNet
 
 Campus: [architecture and provisioning](docs/CAMPUS.md). The local launcher shares one ngrok origin between the Bank and Campus servers.
@@ -15,9 +12,9 @@ BeyondNet is an Android payment proof of concept for environments with unreliabl
 
 > BeyondNet uses demo funds and has no real UPI or banking integration. Payment initiation can happen offline; final settlement requires an internet-connected gateway to reach the bank.
 
-**[Download bundled Android 1.6.0](installers/BeyondNet-Android-1.6.0.apk)** · [Relay setup and testing](docs/RELAY_APPROVAL_FLOW.md) · [APK checksums](installers/SHA256SUMS.txt) · [Bank setup QR](installers/BeyondNet-bank-setup.png) · [Campus setup QR](installers/BeyondNet-campus-setup.png)
+**[Download Android 1.6.1](https://github.com/Shikharyadav25/BeyondNet/releases/download/v1.6.1/BeyondNet-Android-1.6.1.apk)** · [Release and checksum](https://github.com/Shikharyadav25/BeyondNet/releases/tag/v1.6.1) · [Relay setup and testing](docs/RELAY_APPROVAL_FLOW.md) · [Bank setup QR](installers/BeyondNet-bank-setup.png) · [Campus setup QR](installers/BeyondNet-campus-setup.png)
 
-**159 app tests and 55 Java backend tests passed on 30 October 2026.** Checks cover direct online payments, a five-phone topology with real-bank settlement and offline receipt return, and an eight-handoff routing boundary. Physical Bluetooth range, locked-screen delivery and battery performance still require phone testing. The bundled 1.6.0 APK retains the local signing identity used for 1.5.2–1.5.7; upgrading an older installation signed with a different key needs its original signer.
+Install build 29 on each participating phone. The release APK uses the same signing certificate as the bundled 1.6.0 installer, so Android can update that installation in place. Keep an enrolled app installed while it holds pending payments.
 
 Current signup includes lowercase payment IDs, live availability checks, name-based suggestions and an optional demonstration identity-input step after filling the account form. Document inputs are temporary and do not establish verified identity.
 
@@ -137,16 +134,14 @@ See [release validation and acceptance steps](docs/RELEASE_1.4.2.md) and the [se
 
 | Check | Result | What it exercises |
 | --- | --- | --- |
-| Flutter application tests | **131 passed · 28 Oct** | Accounts, payments, simulated offline routing, Bluetooth startup, receipt recovery, bank retry and PIN-page reconnection |
-| Java bank tests | **46 passed · 1.4.4 baseline** | Settlement, database fault recovery, route validation, mailbox ownership, PIN checks, rejection privacy and receipt refresh |
-| Android native tests | **20 passed · 27 Oct baseline** | Service lifecycle, BLE session APIs and SQLite startup using Robolectric |
-| Independent Python tests | **6 passed · 1.4.4 baseline** | HTTP/WebSocket behavior, cross-language cryptography, supplementary-key ordering and legacy migration |
-| Flutter static analysis | **No issues** | Application and test source checks |
-| Release APK build | **Passed** | Version 1.4.5, build code 19, Android 10+, existing signing identity verified |
+| Flutter application tests | **208 passed** | Offline authorization, approval, reconnection, routing, signed receipts and payment recovery |
+| Java bank tests | **55 passed** | Settlement, duplicate submissions, ledger and receipt handling |
+| Python tests | **9 passed** | Bank and Campus integration and Dart interoperability |
+| Android native tests | **Passed** | Foreground service, Bluetooth session and SQLite startup |
+| Flutter static analysis | **Passed** | Application and test source |
+| Android release build | **Passed** | Version 1.6.1, build 29, Android 10+ |
 
-Tests use temporary identities and a separate PostgreSQL instance. The live integration tests exercise the Dart app against the Java bank; Bluetooth radio behavior is simulated. No new physical two-phone payment or on-device upgrade was observed for this release.
-
-Bank/native source is unchanged in 1.4.5; baseline results above belong to their earlier validations. The current full Flutter suite includes a real Dart-to-Java bank integration check on an isolated database. Detailed scope and the phone acceptance checklist are in [1.4.5 release validation](docs/RELEASE_1.4.5.md). Earlier audit evidence remains in [1.4.2 validation results](docs/releases/1.4.2-validation.json).
+The integration suite sends a payment through three offline relays to a gateway backed by Spring Boot and PostgreSQL. The receipt returns while the payer is still offline. Bluetooth contacts are simulated. Discovery time, locked-screen delivery and range still need measurement on physical phones. [1.6.1 test run](https://github.com/Shikharyadav25/BeyondNet/actions/runs/44444881680) · [Phone test walkthrough](docs/RELAY_APPROVAL_FLOW.md)
 
 ## Tech stack
 
@@ -224,7 +219,7 @@ Keep the bank and tunnel running, and the laptop awake and online during testing
 
 ### 3. Install and enroll the phones
 
-For the 1.6.1 fixes, build the Android app from `main` with Flutter 3.47.6. To update an enrolled phone in place, sign the build with the same key used for its installed APK. GitHub Actions also produces a test APK for fresh installations. [Android build checks](https://github.com/Shikharyadav25/BeyondNet/actions/workflows/campus-checks.yml)
+Download the signed 1.6.1 APK onto both phones. If Android reports a signing conflict on a custom installation, use that installation’s original signing key for the update. The APK produced by a GitHub Actions runner uses its own development key. [Android release](https://github.com/Shikharyadav25/BeyondNet/releases/tag/v1.6.1)
 
 1. While online, scan the bank QR or select its image from the gallery.
 2. Create Personal and Merchant accounts with unique IDs ending in `@beyondnet` and passwords of at least eight characters.
@@ -280,7 +275,7 @@ python3 -m venv .venv
 ./scripts/check.sh
 ```
 
-Integration checks use temporary identities and isolated PostgreSQL schemas. The current PIN/connection regression tests and physical-test limits are recorded in [1.4.5 release validation](docs/RELEASE_1.4.5.md). Review evidence remains in [1.4.4 validation](docs/RELEASE_1.4.4.md), [1.4.2 validation](docs/RELEASE_1.4.2.md) and earlier dated results in [historical validation](docs/VALIDATION.md).
+Integration checks use temporary identities and isolated PostgreSQL schemas. The latest checks and physical-test limits appear in [verified release results](#verified-release-results). Review evidence remains in [1.4.4 validation](docs/RELEASE_1.4.4.md), [1.4.2 validation](docs/RELEASE_1.4.2.md) and earlier dated results in [historical validation](docs/VALIDATION.md).
 
 ## Project structure
 
