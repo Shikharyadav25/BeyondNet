@@ -131,8 +131,9 @@ void main() {
             client: client,
             authorizePayment: () async => true,
             socketConnector: (url) async {
-              if (!client.online)
+              if (!client.online) {
                 throw const SocketException('This test phone is offline');
+              }
               return WebSocket.connect(
                 Uri.parse(url)
                     .replace(scheme: 'ws', host: '127.0.0.1', port: port)
