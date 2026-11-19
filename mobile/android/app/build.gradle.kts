@@ -4,6 +4,23 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Robolectric 4.16.1 uses API 29 and 34 for the test cases and API 36 for
+// compile-time resources. Resolve each version separately to retain all three.
+val robolectricFrameworks = listOf(
+    "10-robolectric-5803371-i7",
+    "14-robolectric-10818077-i7",
+    "16-robolectric-13921718-i7",
+).map { version ->
+    configurations.detachedConfiguration(
+        dependencies.create("org.robolectric:android-all-instrumented:$version"),
+    ).apply { isTransitive = false }
+}
+val robolectricFrameworkDir = layout.buildDirectory.dir("robolectric-frameworks")
+val prepareRobolectricFrameworks = tasks.register<Sync>("prepareRobolectricFrameworks") {
+    from(robolectricFrameworks)
+    into(robolectricFrameworkDir)
+}
+
 android {
     namespace = "com.offlinekaro.offline_karo"
     // Compilation SDK is separate from the oldest supported phone version.
@@ -36,6 +53,14 @@ android {
     }
     testOptions {
         unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            it.dependsOn(prepareRobolectricFrameworks)
+            it.inputs.dir(robolectricFrameworkDir)
+            it.systemProperty(
+                "robolectric.dependency.dir",
+                robolectricFrameworkDir.get().asFile.absolutePath,
+            )
+        }
     }
 }
 
